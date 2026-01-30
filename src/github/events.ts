@@ -33,6 +33,7 @@ export interface PullRequestEvent {
 		merged: boolean;
 		user: {
 			login: string;
+			email?: string;
 		};
 	};
 	repository: {
@@ -153,7 +154,9 @@ export async function handlePullRequestEvent(
 
 			const action = event.action === "closed" ? (pr.merged ? "merged" : "closed") : event.action;
 			const message = `${GH_ICON} Referenced in PR <a href="${pr.html_url}">#${pr.number}</a> (${action})`;
-			await odoo.addMessage(ref.taskId, message);
+			// Pass PR author's email if available, otherwise their GitHub login for mapping lookup
+			const authorIdentifier = pr.user.email || pr.user.login;
+			await odoo.addMessage(ref.taskId, message, authorIdentifier);
 
 			const targetStage = getTargetStage(ref.action);
 			if (targetStage) {

@@ -12,6 +12,7 @@ export interface Env {
 	GITHUB_TOKEN?: string;
 	ODOO_URL: string;
 	ODOO_DATABASE: string;
+	ODOO_USERNAME: string;
 	ODOO_API_KEY: string;
 	// Stage configuration - can be ID (number) or name (string)
 	ODOO_STAGE_DONE: string; // Required: stage for closes/fixes when merged
@@ -64,6 +65,7 @@ export default {
 		const odoo = new OdooClient({
 			url: env.ODOO_URL,
 			database: env.ODOO_DATABASE,
+			username: env.ODOO_USERNAME,
 			apiKey: env.ODOO_API_KEY,
 			stages: {
 				done: parseStageRef(env.ODOO_STAGE_DONE),

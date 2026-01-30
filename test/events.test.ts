@@ -220,7 +220,8 @@ describe("handlePullRequestEvent", () => {
 		expect(result.processed).toBe(1);
 		expect(odoo.addMessage).toHaveBeenCalledWith(
 			123,
-			expect.stringContaining("#42")
+			expect.stringContaining("#42"),
+			"testuser"
 		);
 	});
 
