@@ -23,6 +23,7 @@ export type UserMapping = Record<string, string>;
 export interface OdooConfig {
 	url: string;
 	database: string;
+	username: string; // Login email for the API user
 	apiKey: string;
 	stages: StageConfig;
 	userMapping?: UserMapping; // Optional: GitHub email -> Odoo email
@@ -34,9 +35,67 @@ export class OdooClient {
 	private requestId = 0;
 	private partnerIdCache = new Map<string, number>(); // email -> partner_id
 	private subtypeCache: number | null = null; // Note subtype ID
+	private uidCache: number | null = null; // Authenticated user ID
 
 	constructor(config: OdooConfig) {
 		this.config = config;
+	}
+
+	private async getUid(): Promise<number> {
+		if (this.uidCache !== null) {
+			return this.uidCache;
+		}
+
+		// Authenticate to get the user ID
+		const request: JsonRpcRequest = {
+			jsonrpc: "2.0",
+			method: "call",
+			params: {
+				service: "common",
+				method: "authenticate",
+				args: [this.config.database, this.config.username, this.config.apiKey, {}],
+			},
+			id: ++this.requestId,
+		};
+
+		const response = await fetch(`${this.config.url}/jsonrpc`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(request),
+		});
+
+		if (!response.ok) {
+			throw new Error(`Odoo auth HTTP error: ${response.status}`);
+		}
+
+		const json = (await response.json()) as JsonRpcResponse<number | false>;
+
+		if (json.error) {
+			const errorData = json.error.data;
+			const detail = errorData?.message || errorData?.debug || "";
+			throw new Error(`Odoo auth error: ${json.error.message}${detail ? ` - ${detail}` : ""}`);
+		}
+
+		if (!json.result) {
+			throw new Error("Odoo authentication failed: invalid credentials");
+		}
+
+		this.uidCache = json.result;
+		return json.result;
+	}
+
+	private async executeKw<T>(
+		model: string,
+		method: string,
+		args: unknown[],
+		kwargs?: Record<string, unknown>,
+	): Promise<T> {
+		const uid = await this.getUid();
+		return this.rpc<T>("/jsonrpc", "call", {
+			service: "object",
+			method: "execute_kw",
+			args: [this.config.database, uid, this.config.apiKey, model, method, args, kwargs ?? {}],
+		});
 	}
 
 	private async rpc<T>(
@@ -84,7 +143,9 @@ export class OdooClient {
 				const json = (await response.json()) as JsonRpcResponse<T>;
 
 				if (json.error) {
-					throw new Error(`Odoo RPC error: ${json.error.message}`);
+					const errorData = json.error.data;
+					const detail = errorData?.message || errorData?.debug || "";
+					throw new Error(`Odoo RPC error: ${json.error.message}${detail ? ` - ${detail}` : ""}`);
 				}
 
 				return json.result as T;
@@ -102,60 +163,31 @@ export class OdooClient {
 	}
 
 	async getTask(id: number): Promise<OdooTask | null> {
-		const result = await this.rpc<OdooTask[]>("/jsonrpc", "call", {
-			service: "object",
-			method: "execute_kw",
-			args: [
-				this.config.database,
-				2, // uid placeholder - API key auth handles this
-				this.config.apiKey,
-				"project.task",
-				"search_read",
-				[[["id", "=", id]]],
-				{ fields: ["id", "name", "stage_id"], limit: 1 },
-			],
-		});
-
+		const result = await this.executeKw<OdooTask[]>(
+			"project.task",
+			"search_read",
+			[[["id", "=", id]]],
+			{ fields: ["id", "name", "stage_id"], limit: 1 },
+		);
 		return result.length > 0 ? result[0] : null;
 	}
 
 	async getUserByEmail(email: string): Promise<OdooUser | null> {
 		// Search by email OR login (login is often an email address in Odoo)
-		const result = await this.rpc<OdooUser[]>("/jsonrpc", "call", {
-			service: "object",
-			method: "execute_kw",
-			args: [
-				this.config.database,
-				2,
-				this.config.apiKey,
-				"res.users",
-				"search_read",
-				[["|", ["email", "=", email], ["login", "=", email]]],
-				{ fields: ["id", "name", "login", "email", "partner_id"], limit: 1 },
-			],
-		});
-
+		const result = await this.executeKw<OdooUser[]>(
+			"res.users",
+			"search_read",
+			[["|", ["email", "=", email], ["login", "=", email]]],
+			{ fields: ["id", "name", "login", "email", "partner_id"], limit: 1 },
+		);
 		return result.length > 0 ? result[0] : null;
 	}
 
 	async getPartnerIdForUser(userId: number): Promise<number | null> {
-		const result = await this.rpc<OdooUser[]>("/jsonrpc", "call", {
-			service: "object",
-			method: "execute_kw",
-			args: [
-				this.config.database,
-				2,
-				this.config.apiKey,
-				"res.users",
-				"read",
-				[[userId], ["partner_id"]],
-			],
-		});
-
+		const result = await this.executeKw<OdooUser[]>("res.users", "read", [[userId], ["partner_id"]]);
 		if (result.length === 0 || !result[0].partner_id) {
 			return null;
 		}
-
 		// partner_id is returned as [id, name] tuple
 		return Array.isArray(result[0].partner_id) ? result[0].partner_id[0] : null;
 	}
@@ -164,21 +196,12 @@ export class OdooClient {
 		if (this.subtypeCache !== null) {
 			return this.subtypeCache;
 		}
-
-		const result = await this.rpc<OdooMessageSubtype[]>("/jsonrpc", "call", {
-			service: "object",
-			method: "execute_kw",
-			args: [
-				this.config.database,
-				2,
-				this.config.apiKey,
-				"mail.message.subtype",
-				"search_read",
-				[[["name", "=", "Note"]]],
-				{ fields: ["id", "name"], limit: 1 },
-			],
-		});
-
+		const result = await this.executeKw<OdooMessageSubtype[]>(
+			"mail.message.subtype",
+			"search_read",
+			[[["name", "=", "Note"]]],
+			{ fields: ["id", "name"], limit: 1 },
+		);
 		this.subtypeCache = result.length > 0 ? result[0].id : null;
 		return this.subtypeCache;
 	}
@@ -210,8 +233,8 @@ export class OdooClient {
 		return fallbackName || "unknown";
 	}
 
-	async resolveAuthorPartnerId(email?: string): Promise<number | null> {
-		if (!email) {
+	async resolveAuthorPartnerId(identifier?: string): Promise<number | null> {
+		if (!identifier) {
 			// Use default user if configured
 			if (this.config.defaultUserId) {
 				return this.getPartnerIdForUser(this.config.defaultUserId);
@@ -220,20 +243,20 @@ export class OdooClient {
 		}
 
 		// Check cache first
-		if (this.partnerIdCache.has(email)) {
-			return this.partnerIdCache.get(email) ?? null;
+		if (this.partnerIdCache.has(identifier)) {
+			return this.partnerIdCache.get(identifier) ?? null;
 		}
 
-		// Use mapped email if configured, otherwise use original email
+		// Use mapped email if configured, otherwise use original identifier
 		const mapping = this.config.userMapping;
-		const odooEmail = mapping?.[email] ?? email;
+		const odooEmail = mapping?.[identifier] ?? identifier;
 
 		// Look up user by email (searches both email and login fields)
 		const user = await this.getUserByEmail(odooEmail);
 		if (user?.partner_id) {
 			const partnerId = Array.isArray(user.partner_id) ? user.partner_id[0] : null;
 			if (partnerId) {
-				this.partnerIdCache.set(email, partnerId);
+				this.partnerIdCache.set(identifier, partnerId);
 				return partnerId;
 			}
 		}
@@ -242,7 +265,7 @@ export class OdooClient {
 		if (this.config.defaultUserId) {
 			const partnerId = await this.getPartnerIdForUser(this.config.defaultUserId);
 			if (partnerId) {
-				this.partnerIdCache.set(email, partnerId);
+				this.partnerIdCache.set(identifier, partnerId);
 				return partnerId;
 			}
 		}
@@ -250,18 +273,21 @@ export class OdooClient {
 		return null;
 	}
 
-	async addMessage(taskId: number, body: string, authorEmail?: string): Promise<number> {
+	async addMessage(taskId: number, body: string, authorIdentifier?: string): Promise<number> {
 		// Try to resolve author for posting as specific user
-		const authorPartnerId = await this.resolveAuthorPartnerId(authorEmail);
+		// Note: author_id is set but may be ignored by Odoo if the API user is a share/portal user
+		const authorPartnerId = await this.resolveAuthorPartnerId(authorIdentifier);
 		const subtypeId = await this.getNoteSubtypeId();
 
 		// Always create message directly in mail.message to preserve HTML formatting
 		// (message_post escapes HTML content)
+		// Use message_type='notification' to work with share/portal users
+		// (Odoo blocks message_type='comment' for non-internal users)
 		const messageData: Record<string, unknown> = {
 			model: "project.task",
 			res_id: taskId,
 			body,
-			message_type: "comment",
+			message_type: "notification",
 			subtype_id: subtypeId || false,
 		};
 
@@ -269,63 +295,30 @@ export class OdooClient {
 			messageData.author_id = authorPartnerId;
 		}
 
-		return this.rpc<number>("/jsonrpc", "call", {
-			service: "object",
-			method: "execute_kw",
-			args: [
-				this.config.database,
-				2,
-				this.config.apiKey,
-				"mail.message",
-				"create",
-				[messageData],
-			],
-		});
+		return this.executeKw<number>("mail.message", "create", [messageData]);
 	}
 
 	async resolveStage(ref: StageRef): Promise<number | null> {
 		if (typeof ref === "number") {
 			return ref;
 		}
-
 		// Search by name
-		const result = await this.rpc<OdooStage[]>("/jsonrpc", "call", {
-			service: "object",
-			method: "execute_kw",
-			args: [
-				this.config.database,
-				2,
-				this.config.apiKey,
-				"project.task.type",
-				"search_read",
-				[[["name", "=", ref]]],
-				{ fields: ["id", "name"], limit: 1 },
-			],
-		});
-
+		const result = await this.executeKw<OdooStage[]>(
+			"project.task.type",
+			"search_read",
+			[[["name", "=", ref]]],
+			{ fields: ["id", "name"], limit: 1 },
+		);
 		return result.length > 0 ? result[0].id : null;
 	}
 
 	async setStage(taskId: number, stageRef?: StageRef): Promise<boolean> {
 		const ref = stageRef ?? this.config.stages.done;
 		const stageId = await this.resolveStage(ref);
-
 		if (stageId === null) {
 			throw new Error(`Stage not found: ${ref}`);
 		}
-
-		return this.rpc<boolean>("/jsonrpc", "call", {
-			service: "object",
-			method: "execute_kw",
-			args: [
-				this.config.database,
-				2,
-				this.config.apiKey,
-				"project.task",
-				"write",
-				[[taskId], { stage_id: stageId }],
-			],
-		});
+		return this.executeKw<boolean>("project.task", "write", [[taskId], { stage_id: stageId }]);
 	}
 
 	get stages(): StageConfig {

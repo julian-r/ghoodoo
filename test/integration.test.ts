@@ -21,6 +21,7 @@ const testEnv: Env = {
 	GITHUB_WEBHOOK_SECRET: "test-secret",
 	ODOO_URL: "https://odoo.example.com",
 	ODOO_DATABASE: "test_db",
+	ODOO_USERNAME: "bot@example.com",
 	ODOO_API_KEY: "test_api_key",
 	ODOO_STAGE_DONE: "5",
 };
@@ -115,7 +116,9 @@ describe("Worker Integration", () => {
 	describe("push event", () => {
 		it("processes push event with ODP reference", async () => {
 			mockOdooResponses([
+				42, // auth
 				[{ id: 123, name: "Test Task", stage_id: [1, "Todo"] }], // getTask
+				[{ id: 1, name: "Note" }], // getNoteSubtypeId
 				1, // addMessage
 			]);
 
@@ -155,6 +158,7 @@ describe("Worker Integration", () => {
 
 		it("reports errors for missing tasks", async () => {
 			mockOdooResponses([
+				42, // auth
 				[], // getTask returns empty
 			]);
 
@@ -195,7 +199,9 @@ describe("Worker Integration", () => {
 	describe("pull_request event", () => {
 		it("processes PR open event", async () => {
 			mockOdooResponses([
+				42, // auth
 				[{ id: 456, name: "Test Task", stage_id: [1, "Todo"] }], // getTask
+				[{ id: 1, name: "Note" }], // getNoteSubtypeId
 				1, // addMessage
 			]);
 
@@ -235,7 +241,9 @@ describe("Worker Integration", () => {
 
 		it("sets done stage when PR with close keyword is merged", async () => {
 			mockOdooResponses([
+				42, // auth
 				[{ id: 123, name: "Test Task", stage_id: [1, "Todo"] }], // getTask
+				[{ id: 1, name: "Note" }], // getNoteSubtypeId
 				1, // addMessage
 				true, // setStage
 			]);
@@ -269,8 +277,8 @@ describe("Worker Integration", () => {
 			const response = await worker.fetch(request, testEnv);
 
 			expect(response.status).toBe(200);
-			// Verify setStage was called (getTask, getNoteSubtype, addMessage, setStage = 4 calls)
-			expect(fetchSpy).toHaveBeenCalledTimes(4);
+			// Verify setStage was called (auth, getTask, resolveAuthorPartnerId, getNoteSubtype, addMessage, setStage = 6 calls)
+			expect(fetchSpy).toHaveBeenCalledTimes(6);
 		});
 	});
 
@@ -321,9 +329,11 @@ describe("Worker Integration", () => {
 	describe("configuration parsing", () => {
 		it("parses stage IDs as numbers", async () => {
 			mockOdooResponses([
+				42, // auth
 				[{ id: 123, name: "Test Task", stage_id: [1, "Todo"] }],
+				[{ id: 1, name: "Note" }], // getNoteSubtypeId
 				1, // addMessage
-				true, // setStage  
+				true, // setStage
 			]);
 
 			const envWithStages: Env = {
@@ -366,7 +376,9 @@ describe("Worker Integration", () => {
 
 		it("parses stage names as strings", async () => {
 			mockOdooResponses([
+				42, // auth
 				[{ id: 123, name: "Test Task", stage_id: [1, "Todo"] }],
+				[{ id: 1, name: "Note" }], // getNoteSubtypeId
 				1, // addMessage
 				[{ id: 5, name: "In Progress" }], // resolveStage
 				true, // setStage
