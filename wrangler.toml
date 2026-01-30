@@ -1,0 +1,20 @@
+name = "ghoodoo"
+main = "src/index.ts"
+compatibility_date = "2024-11-01"
+
+# Environment variables (set via `wrangler secret put`)
+# GITHUB_WEBHOOK_SECRET - Webhook signature verification
+# GITHUB_TOKEN - For posting comments back to PRs
+# ODOO_URL - Base URL (e.g., https://mycompany.odoo.com)
+# ODOO_DATABASE - Database name
+# ODOO_API_KEY - API key for authentication
+#
+# Stage configuration (can be stage ID or stage name):
+# ODOO_STAGE_DONE - Required: stage for Closes/Fixes when PR merged (e.g., "Done" or "4")
+# ODOO_STAGE_IN_PROGRESS - Optional: stage when PR opened (e.g., "In Progress" or "2")
+# ODOO_STAGE_CANCELED - Optional: stage when PR closed without merge (e.g., "Canceled" or "5")
+#
+# User mapping (post messages as specific Odoo user):
+# ODOO_USER_MAPPING - Optional: JSON mapping GitHub email -> Odoo email
+#                     e.g., {"dev@github.com": "dev@company.com"}
+# ODOO_DEFAULT_USER_ID - Optional: fallback Odoo user ID when no mapping found

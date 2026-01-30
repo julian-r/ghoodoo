@@ -1,0 +1,27 @@
+{
+	"ref": "refs/heads/main",
+	"repository": {
+		"full_name": "myorg/myrepo",
+		"html_url": "https://github.com/myorg/myrepo"
+	},
+	"commits": [
+		{
+			"id": "abc123def456789",
+			"message": "Fix login bug\n\nCloses ODP-123",
+			"url": "https://github.com/myorg/myrepo/commit/abc123def456789",
+			"author": {
+				"name": "John Doe",
+				"username": "johndoe"
+			}
+		},
+		{
+			"id": "def456abc789123",
+			"message": "Refs ODP-456 - update docs",
+			"url": "https://github.com/myorg/myrepo/commit/def456abc789123",
+			"author": {
+				"name": "Jane Smith",
+				"username": "janesmith"
+			}
+		}
+	]
+}

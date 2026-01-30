@@ -1,0 +1,20 @@
+{
+	"action": "opened",
+	"pull_request": {
+		"number": 42,
+		"title": "Implement feature X",
+		"body": "This PR implements feature X.\n\nCloses ODP-100\nRefs ODP-101",
+		"html_url": "https://github.com/myorg/myrepo/pull/42",
+		"merged": false,
+		"user": {
+			"login": "developer"
+		}
+	},
+	"repository": {
+		"owner": {
+			"login": "myorg"
+		},
+		"name": "myrepo",
+		"full_name": "myorg/myrepo"
+	}
+}
