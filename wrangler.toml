@@ -9,13 +9,12 @@ ODOO_USERNAME = "github-bot@makespan.com"
 ODOO_STAGE_DONE = "Done"
 ODOO_STAGE_IN_PROGRESS = "In Progress"
 ODOO_STAGE_CANCELED = "Canceled"
+ODOO_USER_MAPPING = '{"julian.rath@makespan.com":"julian.rath@makespan.com","julian.rath@skalarsystems.com":"julian.rath@makespan.com","jakob.auer@gmail.com":"jakob.auer@makespan.com"}'
 
 # Secrets (set via `wrangler secret put`):
 # GITHUB_WEBHOOK_SECRET - Webhook signature verification
 # ODOO_API_KEY - API key for authentication
 #
-# Optional secrets:
+# Optional:
 # GITHUB_TOKEN - For posting comments back to PRs
-# ODOO_USER_MAPPING - JSON mapping GitHub email -> Odoo email
-#                     e.g., {"dev@github.com": "dev@company.com"}
 # ODOO_DEFAULT_USER_ID - Fallback Odoo user ID when no mapping found
