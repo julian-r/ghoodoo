@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { OdooClient, type OdooConfig } from "../src/odoo/client.js";
 
 const baseConfig: OdooConfig = {
@@ -26,7 +26,7 @@ function mockFetch(responses: Array<{ result?: unknown; error?: { message: strin
 				id: callIndex,
 				...(response.error ? { error: response.error } : { result: response.result }),
 			}),
-			{ status: 200, headers: { "Content-Type": "application/json" } }
+			{ status: 200, headers: { "Content-Type": "application/json" } },
 		);
 	});
 }
@@ -152,14 +152,19 @@ describe("OdooClient", () => {
 			const client = new OdooClient(baseConfig);
 
 			await expect(client.setStage(123, "NonExistent")).rejects.toThrow(
-				"Stage not found: NonExistent"
+				"Stage not found: NonExistent",
 			);
 		});
 	});
 
 	describe("getUserByEmail", () => {
 		it("returns user when found", async () => {
-			const user = { id: 1, login: "user@example.com", email: "user@example.com", partner_id: [10, "Partner"] };
+			const user = {
+				id: 1,
+				login: "user@example.com",
+				email: "user@example.com",
+				partner_id: [10, "Partner"],
+			};
 			fetchSpy = mockFetch([authResponse, { result: [user] }]);
 
 			const client = new OdooClient(baseConfig);
@@ -262,19 +267,17 @@ describe("OdooClient", () => {
 				callCount++;
 				// First call is auth
 				if (callCount === 1) {
-					return new Response(
-						JSON.stringify({ jsonrpc: "2.0", id: 1, result: 42 }),
-						{ status: 200 }
-					);
+					return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: 42 }), {
+						status: 200,
+					});
 				}
 				// Fail twice, then succeed
 				if (callCount < 4) {
 					return new Response("Server Error", { status: 500 });
 				}
-				return new Response(
-					JSON.stringify({ jsonrpc: "2.0", id: 1, result: [{ id: 123 }] }),
-					{ status: 200 }
-				);
+				return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: [{ id: 123 }] }), {
+					status: 200,
+				});
 			});
 
 			const client = new OdooClient(baseConfig);
@@ -290,19 +293,17 @@ describe("OdooClient", () => {
 				callCount++;
 				// First call is auth
 				if (callCount === 1) {
-					return new Response(
-						JSON.stringify({ jsonrpc: "2.0", id: 1, result: 42 }),
-						{ status: 200 }
-					);
+					return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: 42 }), {
+						status: 200,
+					});
 				}
 				// Fail once, then succeed
 				if (callCount === 2) {
 					return new Response("Rate limited", { status: 429 });
 				}
-				return new Response(
-					JSON.stringify({ jsonrpc: "2.0", id: 1, result: [{ id: 123 }] }),
-					{ status: 200 }
-				);
+				return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: [{ id: 123 }] }), {
+					status: 200,
+				});
 			});
 
 			const client = new OdooClient(baseConfig);
@@ -318,10 +319,9 @@ describe("OdooClient", () => {
 				callCount++;
 				// First call is auth
 				if (callCount === 1) {
-					return new Response(
-						JSON.stringify({ jsonrpc: "2.0", id: 1, result: 42 }),
-						{ status: 200 }
-					);
+					return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: 42 }), {
+						status: 200,
+					});
 				}
 				return new Response("Server Error", { status: 500 });
 			});

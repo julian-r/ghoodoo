@@ -1,5 +1,10 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { handlePushEvent, handlePullRequestEvent, type PushEvent, type PullRequestEvent } from "../src/github/events.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+	handlePullRequestEvent,
+	handlePushEvent,
+	type PullRequestEvent,
+	type PushEvent,
+} from "../src/github/events.js";
 import type { OdooClient } from "../src/odoo/client.js";
 
 // Create a mock OdooClient
@@ -50,7 +55,7 @@ describe("handlePushEvent", () => {
 		expect(odoo.addMessage).toHaveBeenCalledWith(
 			123,
 			expect.stringContaining("abc1234"),
-			"test@example.com"
+			"test@example.com",
 		);
 	});
 
@@ -196,6 +201,7 @@ describe("handlePullRequestEvent", () => {
 			body: null,
 			html_url: "https://github.com/owner/repo/pull/42",
 			merged: false,
+			draft: false,
 			user: { login: "testuser" },
 		},
 		repository: {
@@ -218,11 +224,7 @@ describe("handlePullRequestEvent", () => {
 		const result = await handlePullRequestEvent(event, odoo, null);
 
 		expect(result.processed).toBe(1);
-		expect(odoo.addMessage).toHaveBeenCalledWith(
-			123,
-			expect.stringContaining("#42"),
-			"testuser"
-		);
+		expect(odoo.addMessage).toHaveBeenCalledWith(123, expect.stringContaining("#42"), "testuser");
 	});
 
 	it("processes PR with ODP reference in body", async () => {
@@ -292,6 +294,41 @@ describe("handlePullRequestEvent", () => {
 		expect(odoo.setStage).toHaveBeenCalledWith(123, 6); // canceled stage
 	});
 
+	it("does not set inProgress stage when draft PR is opened", async () => {
+		const odoo = createMockOdooClient();
+		const event: PullRequestEvent = {
+			...basePREvent,
+			action: "opened",
+			pull_request: {
+				...basePREvent.pull_request,
+				title: "Refs ODP-123",
+				draft: true,
+			},
+		};
+
+		await handlePullRequestEvent(event, odoo, null);
+
+		expect(odoo.addMessage).toHaveBeenCalled();
+		expect(odoo.setStage).not.toHaveBeenCalled();
+	});
+
+	it("sets inProgress stage when draft PR is marked ready for review", async () => {
+		const odoo = createMockOdooClient();
+		const event: PullRequestEvent = {
+			...basePREvent,
+			action: "ready_for_review",
+			pull_request: {
+				...basePREvent.pull_request,
+				title: "Refs ODP-123",
+				draft: false,
+			},
+		};
+
+		await handlePullRequestEvent(event, odoo, null);
+
+		expect(odoo.setStage).toHaveBeenCalledWith(123, 2);
+	});
+
 	it("ignores unhandled PR actions", async () => {
 		const odoo = createMockOdooClient();
 		const event: PullRequestEvent = {
@@ -338,9 +375,9 @@ describe("handlePullRequestEvent", () => {
 		};
 
 		// Mock fetch for GitHub API
-		const fetchSpy = vi.spyOn(global, "fetch").mockResolvedValue(
-			new Response(JSON.stringify({ id: 1 }), { status: 201 })
-		);
+		const fetchSpy = vi
+			.spyOn(global, "fetch")
+			.mockResolvedValue(new Response(JSON.stringify({ id: 1 }), { status: 201 }));
 
 		await handlePullRequestEvent(event, odoo, githubConfig);
 
@@ -351,7 +388,7 @@ describe("handlePullRequestEvent", () => {
 				headers: expect.objectContaining({
 					Authorization: "Bearer test-token",
 				}),
-			})
+			}),
 		);
 
 		fetchSpy.mockRestore();
@@ -370,16 +407,16 @@ describe("handlePullRequestEvent", () => {
 			},
 		};
 
-		const fetchSpy = vi.spyOn(global, "fetch").mockResolvedValue(
-			new Response(JSON.stringify({ id: 1 }), { status: 201 })
-		);
+		const fetchSpy = vi
+			.spyOn(global, "fetch")
+			.mockResolvedValue(new Response(JSON.stringify({ id: 1 }), { status: 201 }));
 
 		await handlePullRequestEvent(event, odoo, githubConfig);
 
 		// Should not call GitHub API (only Odoo calls)
 		expect(fetchSpy).not.toHaveBeenCalledWith(
 			expect.stringContaining("github.com"),
-			expect.anything()
+			expect.anything(),
 		);
 
 		fetchSpy.mockRestore();

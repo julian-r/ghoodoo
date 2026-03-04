@@ -7,7 +7,7 @@ describe("verifyWebhookSignature", () => {
 	it("returns true for valid signature", async () => {
 		const payload = '{"test":"data"}';
 		// Pre-computed HMAC SHA-256 of payload with secret
-		const signature = "sha256=f84765f6e07f5c1f9d8b5e3f5c7d9a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8";
+		const _signature = "sha256=f84765f6e07f5c1f9d8b5e3f5c7d9a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8";
 
 		// Generate the actual valid signature
 		const encoder = new TextEncoder();

@@ -1,8 +1,8 @@
 import {
-	type PullRequestEvent,
-	type PushEvent,
 	handlePullRequestEvent,
 	handlePushEvent,
+	type PullRequestEvent,
+	type PushEvent,
 } from "./github/events.js";
 import { verifyWebhookSignature } from "./github/webhook.js";
 import { OdooClient } from "./odoo/client.js";
