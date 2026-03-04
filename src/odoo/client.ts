@@ -1,5 +1,4 @@
 import type {
-	AuthorInfo,
 	JsonRpcRequest,
 	JsonRpcResponse,
 	OdooMessageSubtype,
@@ -184,7 +183,10 @@ export class OdooClient {
 	}
 
 	async getPartnerIdForUser(userId: number): Promise<number | null> {
-		const result = await this.executeKw<OdooUser[]>("res.users", "read", [[userId], ["partner_id"]]);
+		const result = await this.executeKw<OdooUser[]>("res.users", "read", [
+			[userId],
+			["partner_id"],
+		]);
 		if (result.length === 0 || !result[0].partner_id) {
 			return null;
 		}

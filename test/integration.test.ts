@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import worker, { type Env } from "../src/index.js";
 
 // Helper to create valid webhook signature
@@ -9,7 +9,7 @@ async function createSignature(payload: string, secret: string): Promise<string>
 		encoder.encode(secret),
 		{ name: "HMAC", hash: "SHA-256" },
 		false,
-		["sign"]
+		["sign"],
 	);
 	const signatureBytes = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
 	return `sha256=${Array.from(new Uint8Array(signatureBytes))
@@ -36,10 +36,9 @@ describe("Worker Integration", () => {
 			// Only mock Odoo calls, not GitHub
 			if (typeof url === "string" && url.includes("odoo.example.com")) {
 				const response = responses[callIndex++] || responses[responses.length - 1];
-				return new Response(
-					JSON.stringify({ jsonrpc: "2.0", id: callIndex, result: response }),
-					{ status: 200 }
-				);
+				return new Response(JSON.stringify({ jsonrpc: "2.0", id: callIndex, result: response }), {
+					status: 200,
+				});
 			}
 			return new Response("Not mocked", { status: 500 });
 		});
@@ -150,7 +149,11 @@ describe("Worker Integration", () => {
 			const response = await worker.fetch(request, testEnv);
 
 			expect(response.status).toBe(200);
-			const json = await response.json() as { status: string; processed: number; errors: string[] };
+			const json = (await response.json()) as {
+				status: string;
+				processed: number;
+				errors: string[];
+			};
 			expect(json.status).toBe("ok");
 			expect(json.processed).toBe(1);
 			expect(json.errors).toHaveLength(0);
@@ -190,7 +193,7 @@ describe("Worker Integration", () => {
 			const response = await worker.fetch(request, testEnv);
 
 			expect(response.status).toBe(200);
-			const json = await response.json() as { processed: number; errors: string[] };
+			const json = (await response.json()) as { processed: number; errors: string[] };
 			expect(json.processed).toBe(0);
 			expect(json.errors).toContain("ODP-999: Task not found");
 		});
@@ -213,6 +216,7 @@ describe("Worker Integration", () => {
 					body: null,
 					html_url: "https://github.com/owner/repo/pull/42",
 					merged: false,
+					draft: false,
 					user: { login: "testuser" },
 				},
 				repository: {
@@ -234,7 +238,7 @@ describe("Worker Integration", () => {
 			const response = await worker.fetch(request, testEnv);
 
 			expect(response.status).toBe(200);
-			const json = await response.json() as { status: string; processed: number };
+			const json = (await response.json()) as { status: string; processed: number };
 			expect(json.status).toBe("ok");
 			expect(json.processed).toBe(1);
 		});
@@ -256,6 +260,7 @@ describe("Worker Integration", () => {
 					body: null,
 					html_url: "https://github.com/owner/repo/pull/42",
 					merged: true,
+					draft: false,
 					user: { login: "testuser" },
 				},
 				repository: {
@@ -298,7 +303,7 @@ describe("Worker Integration", () => {
 			const response = await worker.fetch(request, testEnv);
 
 			expect(response.status).toBe(200);
-			const json = await response.json() as { status: string; event: string; message: string };
+			const json = (await response.json()) as { status: string; event: string; message: string };
 			expect(json.status).toBe("ok");
 			expect(json.event).toBe("issues");
 			expect(json.message).toBe("Event type not handled");
@@ -321,7 +326,7 @@ describe("Worker Integration", () => {
 			const response = await worker.fetch(request, testEnv);
 
 			expect(response.status).toBe(500);
-			const json = await response.json() as { status: string; message: string };
+			const json = (await response.json()) as { status: string; message: string };
 			expect(json.status).toBe("error");
 		});
 	});
@@ -351,6 +356,7 @@ describe("Worker Integration", () => {
 					body: null,
 					html_url: "https://github.com/owner/repo/pull/42",
 					merged: false,
+					draft: false,
 					user: { login: "testuser" },
 				},
 				repository: {
@@ -398,6 +404,7 @@ describe("Worker Integration", () => {
 					body: null,
 					html_url: "https://github.com/owner/repo/pull/42",
 					merged: false,
+					draft: false,
 					user: { login: "testuser" },
 				},
 				repository: {

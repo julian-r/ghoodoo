@@ -1,5 +1,5 @@
 import type { OdooClient, StageRef } from "../odoo/client.js";
-import { type TaskReference, parseReferences } from "../parser/references.js";
+import { parseReferences, type TaskReference } from "../parser/references.js";
 import { type GitHubCommentConfig, postPRComment } from "./comments.js";
 
 // GitHub icon - using their fluidicon which has colored background for both themes
@@ -31,6 +31,7 @@ export interface PullRequestEvent {
 		body: string | null;
 		html_url: string;
 		merged: boolean;
+		draft: boolean;
 		user: {
 			login: string;
 			email?: string;
@@ -113,7 +114,7 @@ export async function handlePullRequestEvent(
 ): Promise<ProcessResult> {
 	const result: ProcessResult = { processed: 0, errors: [] };
 
-	if (!["opened", "edited", "closed", "reopened"].includes(event.action)) {
+	if (!["opened", "edited", "closed", "reopened", "ready_for_review"].includes(event.action)) {
 		return result;
 	}
 
@@ -127,7 +128,9 @@ export async function handlePullRequestEvent(
 
 	const isMerged = event.action === "closed" && pr.merged;
 	const isClosed = event.action === "closed" && !pr.merged;
-	const isOpened = event.action === "opened" || event.action === "reopened";
+	const isOpened =
+		((event.action === "opened" || event.action === "reopened") && !pr.draft) ||
+		event.action === "ready_for_review";
 	const updatedTasks: string[] = [];
 
 	// Determine which stage to transition to based on PR action
