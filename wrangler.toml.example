@@ -3,13 +3,13 @@ main = "src/index.ts"
 compatibility_date = "2024-11-01"
 
 [vars]
-ODOO_URL = "https://odoo.makespan.com"
+ODOO_URL = "https://odoo.example.com"
 ODOO_DATABASE = "odoo_prod"
-ODOO_USERNAME = "github-bot@makespan.com"
+ODOO_USERNAME = "bot@example.com"
 ODOO_STAGE_DONE = "Done"
 ODOO_STAGE_IN_PROGRESS = "In Progress"
 ODOO_STAGE_CANCELED = "Canceled"
-ODOO_USER_MAPPING = '{"julian.rath@makespan.com":"julian.rath@makespan.com","julian.rath@skalarsystems.com":"julian.rath@makespan.com","jakob.auer@gmail.com":"jakob.auer@makespan.com"}'
+ODOO_USER_MAPPING = '{"dev@github.com":"dev@company.com"}'
 
 # Secrets (set via `wrangler secret put`):
 # GITHUB_WEBHOOK_SECRET - Webhook signature verification

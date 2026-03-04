@@ -1,1 +1,10 @@
 node_modules
+dist
+wrangler.toml
+
+.env
+.env.*
+.env.local
+.env.*.local
+
+.DS_Store

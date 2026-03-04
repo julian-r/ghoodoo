@@ -1,0 +1,9 @@
+pre-commit:
+  parallel: true
+  commands:
+    gitleaks:
+      run: gitleaks protect --staged --no-banner
+
+    biome-check:
+      glob: "*.{ts,js,json}"
+      run: npx biome check {staged_files}
