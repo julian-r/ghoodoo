@@ -97,9 +97,9 @@ export async function handlePushEvent(event: PushEvent, odoo: OdooClient): Promi
 
 			result.processed++;
 		} catch (error) {
-			result.errors.push(
-				`ODP-${taskId}: ${error instanceof Error ? error.message : "Unknown error"}`,
-			);
+			const msg = `ODP-${taskId}: ${error instanceof Error ? error.message : "Unknown error"}`;
+			console.error(msg);
+			result.errors.push(msg);
 		}
 	}
 
@@ -166,9 +166,9 @@ export async function handlePullRequestEvent(
 			updatedTasks.push(`ODP-${ref.taskId}`);
 			result.processed++;
 		} catch (error) {
-			result.errors.push(
-				`ODP-${ref.taskId}: ${error instanceof Error ? error.message : "Unknown error"}`,
-			);
+			const msg = `ODP-${ref.taskId}: ${error instanceof Error ? error.message : "Unknown error"}`;
+			console.error(msg);
+			result.errors.push(msg);
 		}
 	}
 
