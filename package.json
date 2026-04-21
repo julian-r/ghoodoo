@@ -18,6 +18,13 @@
 		"wrangler": "^4.61.1"
 	},
 	"pnpm": {
-		"onlyBuiltDependencies": ["esbuild", "sharp", "workerd"]
+		"onlyBuiltDependencies": [
+			"esbuild",
+			"sharp",
+			"workerd"
+		]
+	},
+	"dependencies": {
+		"@sentry/cloudflare": "^10.49.0"
 	}
 }

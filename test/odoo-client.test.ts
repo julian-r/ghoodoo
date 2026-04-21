@@ -332,6 +332,72 @@ describe("OdooClient", () => {
 		}, 30000);
 	});
 
+	describe("Cloudflare Access diagnostics", () => {
+		it("sends Cloudflare Access service token headers when configured", async () => {
+			const config: OdooConfig = {
+				...baseConfig,
+				accessClientId: "access-client-id",
+				accessClientSecret: "access-client-secret",
+			};
+			fetchSpy = mockFetch([authResponse, { result: [{ id: 123, name: "Task" }] }]);
+
+			const client = new OdooClient(config);
+			await client.getTask(123);
+
+			const authHeaders = (fetchSpy.mock.calls[0][1] as RequestInit).headers as Record<
+				string,
+				string
+			>;
+			expect(authHeaders["CF-Access-Client-Id"]).toBe("access-client-id");
+			expect(authHeaders["CF-Access-Client-Secret"]).toBe("access-client-secret");
+
+			const rpcHeaders = (fetchSpy.mock.calls[1][1] as RequestInit).headers as Record<
+				string,
+				string
+			>;
+			expect(rpcHeaders["CF-Access-Client-Id"]).toBe("access-client-id");
+			expect(rpcHeaders["CF-Access-Client-Secret"]).toBe("access-client-secret");
+		});
+
+		it("throws a clear error on Access login redirects", async () => {
+			fetchSpy = vi.spyOn(global, "fetch").mockResolvedValue(
+				new Response("", {
+					status: 302,
+					headers: {
+						Location:
+							"https://makespan.cloudflareaccess.com/cdn-cgi/access/login/odoo.makespan.com?foo=bar",
+					},
+				}),
+			);
+
+			const client = new OdooClient(baseConfig);
+			await expect(client.getTask(123)).rejects.toThrow(
+				"Cloudflare Access login redirect detected",
+			);
+		});
+
+		it("throws a clear error when HTML is returned instead of JSON", async () => {
+			let callCount = 0;
+			fetchSpy = vi.spyOn(global, "fetch").mockImplementation(async () => {
+				callCount++;
+				if (callCount === 1) {
+					return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: 42 }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				}
+
+				return new Response("<!DOCTYPE html><html><body>Access login</body></html>", {
+					status: 200,
+					headers: { "Content-Type": "text/html" },
+				});
+			});
+
+			const client = new OdooClient(baseConfig);
+			await expect(client.getTask(123)).rejects.toThrow("returned non-JSON response");
+		});
+	});
+
 	describe("stages getter", () => {
 		it("returns configured stages", () => {
 			const client = new OdooClient(baseConfig);
