@@ -25,7 +25,10 @@ wrangler secret put ODOO_STAGE_DONE
 wrangler secret put ODOO_STAGE_IN_PROGRESS  # optional
 wrangler secret put ODOO_STAGE_CANCELED     # optional
 wrangler secret put ODOO_USER_MAPPING       # optional
-wrangler secret put ODOO_DEFAULT_USER_ID    # optional
+wrangler secret put ODOO_DEFAULT_USER_ID          # optional
+wrangler secret put ODOO_CF_ACCESS_CLIENT_ID       # optional (Cloudflare Access service token)
+wrangler secret put ODOO_CF_ACCESS_CLIENT_SECRET   # optional (Cloudflare Access service token)
+wrangler secret put SENTRY_DSN                     # optional
 ```
 
 | Secret | Description |
@@ -41,6 +44,11 @@ wrangler secret put ODOO_DEFAULT_USER_ID    # optional
 | `ODOO_STAGE_CANCELED` | Optional: Stage when PR closed without merge (e.g., `Canceled`) |
 | `ODOO_USER_MAPPING` | Optional: JSON mapping GitHub email → Odoo email (see below) |
 | `ODOO_DEFAULT_USER_ID` | Optional: Fallback Odoo user ID when no mapping found |
+| `ODOO_CF_ACCESS_CLIENT_ID` | Optional: Cloudflare Access service token client ID for protected Odoo |
+| `ODOO_CF_ACCESS_CLIENT_SECRET` | Optional: Cloudflare Access service token client secret for protected Odoo |
+| `SENTRY_DSN` | Optional: Send errors and processing warnings to Sentry |
+
+If `ODOO_URL` is protected by Cloudflare Access, set both `ODOO_CF_ACCESS_CLIENT_ID` and `ODOO_CF_ACCESS_CLIENT_SECRET`. Without these, requests may be redirected to Access login and webhook processing will fail with a clear redirect/non-JSON error.
 
 ### 2b. Create Odoo service account with Vodoo (recommended)
 
@@ -136,6 +144,22 @@ User mapping allows looking up Odoo users by GitHub username or email. This is u
 ```
 
 Set via: `wrangler secret put ODOO_USER_MAPPING`
+
+### Sentry (optional)
+
+This worker supports Sentry for persistent error tracking.
+
+1. Create a Sentry project for this worker
+2. Set `SENTRY_DSN` as a Wrangler secret
+3. Optionally set these vars in `wrangler.toml`:
+   - `SENTRY_ENVIRONMENT` (e.g. `production`)
+   - `SENTRY_RELEASE` (e.g. `ghoodoo@1.0.0`)
+   - `SENTRY_ENABLE_LOGS` (`true`/`false`, defaults to enabled when `SENTRY_DSN` is set)
+
+In Sentry you will see:
+- Unhandled handler exceptions (HTTP 500 paths)
+- Processing warnings when webhook handling returns `errors[]`
+- Console logs (`log`, `info`, `warn`, `error`) when `SENTRY_ENABLE_LOGS` is enabled
 
 ## Development
 

@@ -27,6 +27,8 @@ export interface OdooConfig {
 	stages: StageConfig;
 	userMapping?: UserMapping; // Optional: GitHub email -> Odoo email
 	defaultUserId?: number; // Optional: fallback user ID for posting messages
+	accessClientId?: string; // Optional: Cloudflare Access service token client ID
+	accessClientSecret?: string; // Optional: Cloudflare Access service token client secret
 }
 
 export class OdooClient {
@@ -38,6 +40,91 @@ export class OdooClient {
 
 	constructor(config: OdooConfig) {
 		this.config = config;
+	}
+
+	private buildHeaders(includeApiAuth = true): Record<string, string> {
+		const headers: Record<string, string> = {
+			"Content-Type": "application/json",
+		};
+
+		if (includeApiAuth) {
+			headers.Authorization = `Bearer ${this.config.apiKey}`;
+		}
+
+		if (this.config.accessClientId && this.config.accessClientSecret) {
+			headers["CF-Access-Client-Id"] = this.config.accessClientId;
+			headers["CF-Access-Client-Secret"] = this.config.accessClientSecret;
+		}
+
+		return headers;
+	}
+
+	private toPreview(text: string, max = 140): string {
+		const compact = text.replace(/\s+/g, " ").trim();
+		if (!compact) {
+			return "";
+		}
+		return compact.length > max ? `${compact.slice(0, max)}…` : compact;
+	}
+
+	private async readResponsePreview(response: Response, max = 140): Promise<string> {
+		const text = await response.text();
+		return this.toPreview(text, max);
+	}
+
+	private getRedirectError(response: Response): Error {
+		const location = response.headers.get("location") ?? "(unknown location)";
+		const compactLocation = this.toPreview(location, 220);
+		const isAccessLoginRedirect =
+			location.includes("cloudflareaccess.com") || location.includes("/cdn-cgi/access/login");
+
+		const hint = isAccessLoginRedirect
+			? "Cloudflare Access login redirect detected. Configure ODOO_CF_ACCESS_CLIENT_ID and ODOO_CF_ACCESS_CLIENT_SECRET (service token), or allow this Worker in Access policy."
+			: "Unexpected redirect from Odoo endpoint.";
+
+		return new Error(
+			`Odoo request redirected (HTTP ${response.status}) to ${compactLocation}. ${hint}`,
+		);
+	}
+
+	private async parseJsonRpcResponse<T>(
+		response: Response,
+		context: "auth" | "rpc",
+	): Promise<JsonRpcResponse<T>> {
+		if (response.status >= 300 && response.status < 400) {
+			throw this.getRedirectError(response);
+		}
+
+		if (!response.ok) {
+			const detail = await this.readResponsePreview(response);
+			throw new Error(
+				`Odoo ${context} HTTP error: ${response.status} ${response.statusText}${
+					detail ? ` - ${detail}` : ""
+				}`,
+			);
+		}
+
+		const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+		const bodyText = await response.text();
+		const bodyPreview = this.toPreview(bodyText);
+
+		try {
+			return JSON.parse(bodyText) as JsonRpcResponse<T>;
+		} catch {
+			if (contentType && !contentType.includes("application/json")) {
+				throw new Error(
+					`Odoo ${context} returned non-JSON response (content-type: ${contentType || "unknown"}, HTTP ${response.status})${
+						bodyPreview ? `. Body starts with: ${bodyPreview}` : ""
+					}`,
+				);
+			}
+
+			throw new Error(
+				`Odoo ${context} returned invalid JSON (HTTP ${response.status})${
+					bodyPreview ? `. Body starts with: ${bodyPreview}` : ""
+				}`,
+			);
+		}
 	}
 
 	private async getUid(): Promise<number> {
@@ -59,15 +146,12 @@ export class OdooClient {
 
 		const response = await fetch(`${this.config.url}/jsonrpc`, {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
+			headers: this.buildHeaders(false),
+			redirect: "manual",
 			body: JSON.stringify(request),
 		});
 
-		if (!response.ok) {
-			throw new Error(`Odoo auth HTTP error: ${response.status}`);
-		}
-
-		const json = (await response.json()) as JsonRpcResponse<number | false>;
+		const json = await this.parseJsonRpcResponse<number | false>(response, "auth");
 
 		if (json.error) {
 			const errorData = json.error.data;
@@ -122,12 +206,14 @@ export class OdooClient {
 
 				const response = await fetch(`${this.config.url}${endpoint}`, {
 					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-						Authorization: `Bearer ${this.config.apiKey}`,
-					},
+					headers: this.buildHeaders(),
+					redirect: "manual",
 					body: JSON.stringify(request),
 				});
+
+				if (response.status >= 300 && response.status < 400) {
+					throw this.getRedirectError(response);
+				}
 
 				// Retry on 5xx or 429 (rate limit)
 				if (response.status >= 500 || response.status === 429) {
@@ -136,10 +222,13 @@ export class OdooClient {
 				}
 
 				if (!response.ok) {
-					throw new Error(`Odoo HTTP error: ${response.status} ${response.statusText}`);
+					const detail = await this.readResponsePreview(response);
+					throw new Error(
+						`Odoo HTTP error: ${response.status} ${response.statusText}${detail ? ` - ${detail}` : ""}`,
+					);
 				}
 
-				const json = (await response.json()) as JsonRpcResponse<T>;
+				const json = await this.parseJsonRpcResponse<T>(response, "rpc");
 
 				if (json.error) {
 					const errorData = json.error.data;
