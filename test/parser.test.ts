@@ -49,9 +49,14 @@ describe("parseReferences", () => {
 		]);
 	});
 
-	it("deduplicates references keeping first occurrence", () => {
+	it("deduplicates repeated references", () => {
 		const result = parseReferences("ODP-123 mentioned again ODP-123");
 		expect(result).toEqual([{ action: "ref", taskId: 123 }]);
+	});
+
+	it("prioritizes close action when task appears multiple times", () => {
+		const result = parseReferences("ODP-123 in title\n\nCloses ODP-123 in body");
+		expect(result).toEqual([{ action: "close", taskId: 123 }]);
 	});
 
 	it("returns empty array when no references found", () => {
