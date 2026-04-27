@@ -122,6 +122,12 @@ export async function handlePullRequestEvent(
 	const textToSearch = `${pr.title}\n${pr.body ?? ""}`;
 	const refs = parseReferences(textToSearch);
 
+	console.info(
+		`PR #${pr.number} action=${event.action} merged=${pr.merged} draft=${pr.draft} refs=${
+			refs.map((r) => `${r.action}:ODP-${r.taskId}`).join(",") || "none"
+		}`,
+	);
+
 	if (refs.length === 0) {
 		return result;
 	}
@@ -163,7 +169,14 @@ export async function handlePullRequestEvent(
 
 			const targetStage = getTargetStage(ref.action);
 			if (targetStage) {
+				console.info(
+					`PR #${pr.number} transitioning ODP-${ref.taskId} via action=${ref.action} to stage=${String(targetStage)}`,
+				);
 				await odoo.setStage(ref.taskId, targetStage);
+			} else {
+				console.info(
+					`PR #${pr.number} no stage transition for ODP-${ref.taskId} (action=${ref.action}, event=${event.action}, merged=${pr.merged})`,
+				);
 			}
 
 			updatedTasks.push(`ODP-${ref.taskId}`);

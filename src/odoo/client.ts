@@ -409,7 +409,18 @@ export class OdooClient {
 		if (stageId === null) {
 			throw new Error(`Stage not found: ${ref}`);
 		}
-		return this.executeKw<boolean>("project.task", "write", [[taskId], { stage_id: stageId }]);
+
+		const updated = await this.executeKw<boolean>("project.task", "write", [
+			[taskId],
+			{ stage_id: stageId },
+		]);
+		if (!updated) {
+			throw new Error(
+				`Stage update returned false for task ${taskId} -> stage ${stageId} (ref: ${String(ref)})`,
+			);
+		}
+
+		return updated;
 	}
 
 	get stages(): StageConfig {
