@@ -155,6 +155,16 @@ describe("OdooClient", () => {
 				"Stage not found: NonExistent",
 			);
 		});
+
+		it("throws when Odoo write returns false", async () => {
+			fetchSpy = mockFetch([authResponse, { result: false }]);
+
+			const client = new OdooClient(baseConfig);
+
+			await expect(client.setStage(123, 5)).rejects.toThrow(
+				"Stage update returned false for task 123 -> stage 5 (ref: 5)",
+			);
+		});
 	});
 
 	describe("getUserByEmail", () => {
