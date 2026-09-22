@@ -117,6 +117,7 @@ describe("Worker Integration", () => {
 			mockOdooResponses([
 				42, // auth
 				[{ id: 123, name: "Test Task", stage_id: [1, "Todo"] }], // getTask
+				[], // author lookup
 				[{ id: 1, name: "Note" }], // getNoteSubtypeId
 				1, // addMessage
 			]);
@@ -204,6 +205,7 @@ describe("Worker Integration", () => {
 			mockOdooResponses([
 				42, // auth
 				[{ id: 456, name: "Test Task", stage_id: [1, "Todo"] }], // getTask
+				[], // author lookup
 				[{ id: 1, name: "Note" }], // getNoteSubtypeId
 				1, // addMessage
 			]);
@@ -247,6 +249,7 @@ describe("Worker Integration", () => {
 			mockOdooResponses([
 				42, // auth
 				[{ id: 123, name: "Test Task", stage_id: [1, "Todo"] }], // getTask
+				[], // author lookup
 				[{ id: 1, name: "Note" }], // getNoteSubtypeId
 				1, // addMessage
 				true, // setStage
@@ -336,6 +339,7 @@ describe("Worker Integration", () => {
 			mockOdooResponses([
 				42, // auth
 				[{ id: 123, name: "Test Task", stage_id: [1, "Todo"] }],
+				[], // author lookup
 				[{ id: 1, name: "Note" }], // getNoteSubtypeId
 				1, // addMessage
 				true, // setStage
@@ -384,6 +388,7 @@ describe("Worker Integration", () => {
 			mockOdooResponses([
 				42, // auth
 				[{ id: 123, name: "Test Task", stage_id: [1, "Todo"] }],
+				[], // author lookup
 				[{ id: 1, name: "Note" }], // getNoteSubtypeId
 				1, // addMessage
 				[{ id: 5, name: "In Progress" }], // resolveStage

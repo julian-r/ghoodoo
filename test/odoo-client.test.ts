@@ -63,7 +63,7 @@ describe("OdooClient", () => {
 
 			const client = new OdooClient(baseConfig);
 
-			await expect(client.getTask(123)).rejects.toThrow("Odoo RPC error: Access denied");
+			await expect(client.getTask(123)).rejects.toThrow("Access denied");
 		});
 	});
 
@@ -354,19 +354,13 @@ describe("OdooClient", () => {
 			const client = new OdooClient(config);
 			await client.getTask(123);
 
-			const authHeaders = (fetchSpy.mock.calls[0][1] as RequestInit).headers as Record<
-				string,
-				string
-			>;
-			expect(authHeaders["CF-Access-Client-Id"]).toBe("access-client-id");
-			expect(authHeaders["CF-Access-Client-Secret"]).toBe("access-client-secret");
+			const authHeaders = new Headers((fetchSpy.mock.calls[0][1] as RequestInit).headers);
+			expect(authHeaders.get("CF-Access-Client-Id")).toBe("access-client-id");
+			expect(authHeaders.get("CF-Access-Client-Secret")).toBe("access-client-secret");
 
-			const rpcHeaders = (fetchSpy.mock.calls[1][1] as RequestInit).headers as Record<
-				string,
-				string
-			>;
-			expect(rpcHeaders["CF-Access-Client-Id"]).toBe("access-client-id");
-			expect(rpcHeaders["CF-Access-Client-Secret"]).toBe("access-client-secret");
+			const rpcHeaders = new Headers((fetchSpy.mock.calls[1][1] as RequestInit).headers);
+			expect(rpcHeaders.get("CF-Access-Client-Id")).toBe("access-client-id");
+			expect(rpcHeaders.get("CF-Access-Client-Secret")).toBe("access-client-secret");
 		});
 
 		it("throws a clear error on Access login redirects", async () => {

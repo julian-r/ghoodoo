@@ -1,6 +1,6 @@
 # Ghoodoo
 
-Cloudflare Worker that syncs GitHub commits and PRs with Odoo tasks via `ODP-XXX` references.
+Cloudflare Worker that syncs GitHub commits and PRs with Odoo tasks via `ODP-XXX` references. Odoo communication is powered by the public [`vodoo`](https://github.com/julian-r/vodoo) TypeScript SDK.
 
 ## Setup
 
@@ -52,7 +52,7 @@ If `ODOO_URL` is protected by Cloudflare Access, set both `ODOO_CF_ACCESS_CLIENT
 
 ### 2b. Create Odoo service account with Vodoo (recommended)
 
-If you have the `vodoo` CLI (see https://github.com/julian/vodoo/blob/main/docs/SECURITY.md), use it to create a bot user and assign the API permission groups:
+If you have the `vodoo` CLI (see https://github.com/julian-r/vodoo/blob/main/docs/SECURITY.md), use it to create a bot user and assign the API permission groups:
 
 ```bash
 # Creates the Vodoo API groups (idempotent)
