@@ -170,8 +170,8 @@ importers:
         specifier: ^10.75.0
         version: 10.75.0(@cloudflare/workers-types@5.20260917.1)(wrangler@4.133.0(@cloudflare/workers-types@5.20260917.1))
       vodoo:
-        specifier: ^4.1.0
-        version: 4.1.0
+        specifier: ^4.2.0
+        version: 4.2.0
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.5.14
@@ -1233,8 +1233,8 @@ packages:
       jsdom:
         optional: true
 
-  vodoo@4.1.0:
-    resolution: {integrity: sha512-fK9V4mvwscPZkTk2IaR2XJl7pK6pF0ktxeNd+uvFsayk/rTN7C1IrqOXMEkzGqO8C+NKoSFZCUPab61sz/T7IQ==}
+  vodoo@4.2.0:
+    resolution: {integrity: sha512-kMpmltdaKy8oXR/6ouzckvAOtOy/aA1x+zhbOILvlUSGgl6+giveZrGSGVIMy8f0CnX1DYQ8DO5tslfERKWu0w==}
     engines: {node: '>=20'}
 
   why-is-node-running@2.3.0:
@@ -1996,7 +1996,7 @@ snapshots:
     transitivePeerDependencies:
       - msw
 
-  vodoo@4.1.0: {}
+  vodoo@4.2.0: {}
 
   why-is-node-running@2.3.0:
     dependencies:

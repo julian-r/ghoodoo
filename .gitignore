@@ -1,7 +1,8 @@
 node_modules
 dist
-wrangler.toml
 
+.dev.vars
+.dev.vars.*
 .env
 .env.*
 .env.local

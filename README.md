@@ -2,17 +2,21 @@
 
 Cloudflare Worker that syncs GitHub commits and PRs with Odoo tasks via `ODP-XXX` references. Odoo communication is powered by the public [`vodoo`](https://github.com/julian-r/vodoo) TypeScript SDK.
 
+Verified GitHub webhooks are published to Cloudflare Queues and acknowledged with HTTP 202. A single-concurrency queue consumer performs the Odoo updates, retries failures five times, and sends exhausted messages to `ghoodoo-events-dlq`.
+
 ## Setup
 
 ### 1. Install dependencies
 
 ```bash
-npm install
+pnpm install
 ```
 
-### 2. Configure secrets
+### 2. Configure bindings
 
-Set the following secrets using `wrangler secret put`:
+The committed `wrangler.jsonc` defines the Worker, producer binding, consumer, observability, and required secret names. It uses `keep_vars` so existing dashboard-managed variables are preserved during deployment.
+
+Set bindings using `wrangler secret put` or manage non-sensitive values in the Cloudflare dashboard:
 
 ```bash
 wrangler secret put GITHUB_WEBHOOK_SECRET
@@ -31,8 +35,8 @@ wrangler secret put ODOO_CF_ACCESS_CLIENT_SECRET   # optional (Cloudflare Access
 wrangler secret put SENTRY_DSN                     # optional
 ```
 
-| Secret | Description |
-|--------|-------------|
+| Binding | Description |
+|---------|-------------|
 | `GITHUB_WEBHOOK_SECRET` | Secret for webhook signature verification |
 | `GITHUB_TOKEN` | GitHub PAT for posting PR comments |
 | `ODOO_URL` | Odoo instance URL (e.g., `https://mycompany.odoo.com`) |
@@ -67,11 +71,17 @@ Minimum required groups for Ghoodoo are **API Base** and **API Project** (task +
 
 Also add the bot user as a follower on any projects whose tasks should be updated.
 
-### 3. Deploy
+### 3. Create queues and deploy
+
+Queue creation is required once per Cloudflare account:
 
 ```bash
-npm run deploy
+pnpm exec wrangler queues create ghoodoo-events
+pnpm exec wrangler queues create ghoodoo-events-dlq
+pnpm deploy
 ```
+
+Subsequent releases only require `pnpm deploy`. The deployment registers `ghoodoo` as the consumer of `ghoodoo-events`.
 
 ### 4. Configure GitHub webhook
 
@@ -119,7 +129,8 @@ Tasks are moved to different stages based on PR actions (if configured):
 
 | PR Action | Stage Used | Condition |
 |-----------|------------|-----------|
-| Opened/Reopened | `ODOO_STAGE_IN_PROGRESS` | If configured |
+| Opened/Reopened | `ODOO_STAGE_IN_PROGRESS` | Non-draft PR and stage configured |
+| Ready for review | `ODOO_STAGE_IN_PROGRESS` | Draft PR becomes ready and stage configured |
 | Merged | `ODOO_STAGE_DONE` | If `Closes`/`Fixes`/`Resolves` keyword used |
 | Closed (not merged) | `ODOO_STAGE_CANCELED` | If configured |
 
@@ -151,30 +162,37 @@ This worker supports Sentry for persistent error tracking.
 
 1. Create a Sentry project for this worker
 2. Set `SENTRY_DSN` as a Wrangler secret
-3. Optionally set these vars in `wrangler.toml`:
+3. Optionally set these dashboard variables:
    - `SENTRY_ENVIRONMENT` (e.g. `production`)
    - `SENTRY_RELEASE` (e.g. `ghoodoo@1.0.0`)
    - `SENTRY_ENABLE_LOGS` (`true`/`false`, defaults to enabled when `SENTRY_DSN` is set)
 
 In Sentry you will see:
-- Unhandled handler exceptions (HTTP 500 paths)
-- Processing warnings when webhook handling returns `errors[]`
+- Webhook validation and queue publishing failures
+- Queue consumer failures and retry attempts
+- Processing warnings when event handling returns `errors[]`
 - Console logs (`log`, `info`, `warn`, `error`) when `SENTRY_ENABLE_LOGS` is enabled
 
 ## Development
 
 ```bash
+# Generate Worker binding types
+pnpm types
+
 # Run locally
-npm run dev
+pnpm dev
 
 # Run tests
-npm test
+pnpm test
+
+# Typecheck
+pnpm typecheck
 
 # Lint
-npm run lint
+pnpm lint
 
 # Format
-npm run format
+pnpm format
 ```
 
 ### Local testing with GitHub webhooks

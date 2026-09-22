@@ -12,6 +12,6 @@
 		"resolveJsonModule": true,
 		"isolatedModules": true
 	},
-	"include": ["src/**/*", "test/**/*"],
+	"include": ["worker-configuration.d.ts", "src/**/*", "test/**/*"],
 	"exclude": ["node_modules"]
 }
