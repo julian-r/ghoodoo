@@ -26,6 +26,16 @@ export interface OdooConfig {
 	protocol?: OdooProtocol;
 }
 
+export interface DeliveryEffect {
+	id: string;
+	stageOrder?: {
+		occurredAt: number;
+		state: "open" | "closed";
+	};
+}
+
+export type DeliveryEffectStatus = "pending" | "completed" | "stale";
+
 /**
  * Ghoodoo-specific adapter around the public Vodoo SDK.
  *
@@ -78,6 +88,7 @@ export class OdooClient {
 				? "Cloudflare Access login redirect detected. Configure ODOO_CF_ACCESS_CLIENT_ID and ODOO_CF_ACCESS_CLIENT_SECRET (service token), or allow this Worker in Access policy."
 				: "Unexpected redirect from Odoo endpoint.";
 			return this.diagnosticErrorResponse(
+				input,
 				`Odoo request redirected (HTTP ${response.status}) to ${compactLocation}. ${hint}`,
 			);
 		}
@@ -100,6 +111,7 @@ export class OdooClient {
 						? `non-JSON response (content-type: ${contentType}, HTTP ${response.status})`
 						: `invalid JSON response (HTTP ${response.status})`;
 				return this.diagnosticErrorResponse(
+					input,
 					`Odoo returned ${kind}${bodyPreview ? `. Body starts with: ${bodyPreview}` : ""}`,
 				);
 			}
@@ -108,7 +120,11 @@ export class OdooClient {
 		return response;
 	};
 
-	private diagnosticErrorResponse(message: string): Response {
+	private diagnosticErrorResponse(input: RequestInfo | URL, message: string): Response {
+		const requestUrl = input instanceof Request ? input.url : String(input);
+		if (requestUrl.includes("/json/2/")) {
+			return Response.json({ message, data: { message } }, { status: 400 });
+		}
 		return Response.json({
 			jsonrpc: "2.0",
 			id: null,
@@ -209,7 +225,69 @@ export class OdooClient {
 		return null;
 	}
 
-	async addMessage(taskId: number, body: string, authorIdentifier?: string): Promise<number> {
+	private deliveryEffectId(effect: DeliveryEffect): string {
+		return effect.id.replace(/[^a-zA-Z0-9-]/g, "-").slice(0, 180);
+	}
+
+	private deliveryMessageId(effect: DeliveryEffect): string {
+		const suffix = effect.stageOrder
+			? `stage-${effect.stageOrder.occurredAt}-${effect.stageOrder.state}`
+			: "effect";
+		return `<ghoodoo.${this.deliveryEffectId(effect)}.${suffix}@github>`;
+	}
+
+	async getDeliveryEffectStatus(
+		taskId: number,
+		effect: DeliveryEffect,
+	): Promise<DeliveryEffectStatus> {
+		const completed = await this.client.searchRead("mail.message", {
+			domain: [
+				["model", "=", "project.task"],
+				["res_id", "=", taskId],
+				["message_id", "ilike", `<ghoodoo.${this.deliveryEffectId(effect)}.%@github>`],
+			],
+			fields: ["id"],
+			limit: 1,
+		});
+		if (completed.length > 0) return "completed";
+		if (!effect.stageOrder) return "pending";
+
+		const latest = await this.client.searchRead("mail.message", {
+			domain: [
+				["model", "=", "project.task"],
+				["res_id", "=", taskId],
+				["message_id", "ilike", "<ghoodoo.%.stage-%@github>"],
+			],
+			fields: ["message_id"],
+			order: "id desc",
+			limit: 1,
+		});
+		const latestMessageId = latest[0]?.message_id;
+		const match =
+			typeof latestMessageId === "string"
+				? /\.stage-(\d+)-(open|closed)@github>$/.exec(latestMessageId)
+				: null;
+		if (!match) return "pending";
+
+		const latestOccurredAt = Number.parseInt(match[1], 10);
+		const latestState = match[2] as "open" | "closed";
+		if (latestOccurredAt > effect.stageOrder.occurredAt) return "stale";
+		if (
+			latestOccurredAt === effect.stageOrder.occurredAt &&
+			latestState === "closed" &&
+			effect.stageOrder.state === "open"
+		) {
+			return "stale";
+		}
+		return "pending";
+	}
+
+	async addMessage(
+		taskId: number,
+		body: string,
+		authorIdentifier?: string,
+		effect?: DeliveryEffect,
+	): Promise<number> {
 		const authorPartnerId = await this.resolveAuthorPartnerId(authorIdentifier);
 		const subtypeId = await this.getNoteSubtypeId();
 		const messageData: Record<string, unknown> = {
@@ -220,6 +298,7 @@ export class OdooClient {
 			subtype_id: subtypeId || false,
 		};
 		if (authorPartnerId) messageData.author_id = authorPartnerId;
+		if (effect) messageData.message_id = this.deliveryMessageId(effect);
 		return this.client.create("mail.message", messageData);
 	}
 

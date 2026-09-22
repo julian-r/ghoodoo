@@ -14,9 +14,9 @@ pnpm install
 
 ### 2. Configure bindings
 
-The committed `wrangler.jsonc` defines the Worker, producer binding, consumer, observability, and required secret names. It uses `keep_vars` so existing dashboard-managed variables are preserved during deployment.
+The committed `wrangler.jsonc` defines the Worker, queue producer/consumer, and observability. It uses `keep_vars` so existing dashboard-managed variables are preserved during deployment. For local development, put the same bindings in `.dev.vars`; Wrangler loads required and optional entries from that file.
 
-Set bindings using `wrangler secret put` or manage non-sensitive values in the Cloudflare dashboard:
+Set production bindings using `wrangler secret put` or manage non-sensitive values in the Cloudflare dashboard:
 
 ```bash
 wrangler secret put GITHUB_WEBHOOK_SECRET

@@ -1,5 +1,7 @@
 import * as Sentry from "@sentry/cloudflare";
 import {
+	buildCompactPullRequestEvents,
+	buildCompactPushEvents,
 	handlePullRequestEvent,
 	handlePushEvent,
 	type ProcessResult,
@@ -11,10 +13,12 @@ import { OdooClient } from "./odoo/client.js";
 
 export interface GhoodooEnv extends Cloudflare.Env {
 	GITHUB_EVENTS_QUEUE: Queue<GitHubEventMessage>;
+	GITHUB_WEBHOOK_SECRET: string;
 	GITHUB_TOKEN?: string;
 	ODOO_URL: string;
 	ODOO_DATABASE: string;
 	ODOO_USERNAME: string;
+	ODOO_API_KEY: string;
 	ODOO_STAGE_DONE: string;
 	ODOO_STAGE_IN_PROGRESS?: string;
 	ODOO_STAGE_CANCELED?: string;
@@ -141,13 +145,15 @@ async function processQueuedEvent(
 	Sentry.setTag("github_event_type", eventType);
 
 	const odoo = createOdooClient(env, eventType, deliveryId);
+	const deliveryContext = { deliveryId };
 	const result =
 		eventType === "push"
-			? await handlePushEvent(message.event, odoo)
+			? await handlePushEvent(message.event, odoo, deliveryContext)
 			: await handlePullRequestEvent(
 					message.event,
 					odoo,
 					env.GITHUB_TOKEN ? { token: env.GITHUB_TOKEN } : null,
+					deliveryContext,
 				);
 
 	reportProcessingErrors(eventType, deliveryId, result.errors);
@@ -208,12 +214,25 @@ export const handler = {
 		}
 
 		try {
-			const queuedEvent: GitHubEventMessage =
+			const compactEvents =
 				eventType === "push"
-					? { eventType, deliveryId, event: event as PushEvent }
-					: { eventType, deliveryId, event: event as PullRequestEvent };
-			await env.GITHUB_EVENTS_QUEUE.send(queuedEvent);
-			return Response.json({ status: "queued", event: eventType, deliveryId }, { status: 202 });
+					? buildCompactPushEvents(event as PushEvent)
+					: buildCompactPullRequestEvents(event as PullRequestEvent);
+			for (const compactEvent of compactEvents) {
+				const queuedEvent: GitHubEventMessage =
+					eventType === "push"
+						? { eventType, deliveryId, event: compactEvent as PushEvent }
+						: {
+								eventType,
+								deliveryId,
+								event: compactEvent as PullRequestEvent,
+							};
+				await env.GITHUB_EVENTS_QUEUE.send(queuedEvent);
+			}
+			return Response.json(
+				{ status: "queued", event: eventType, deliveryId, messages: compactEvents.length },
+				{ status: 202 },
+			);
 		} catch (error) {
 			console.error(
 				JSON.stringify({

@@ -59,6 +59,10 @@ const pullRequestEvent = {
 		html_url: "https://github.com/owner/repo/pull/42",
 		merged: false,
 		draft: false,
+		created_at: "2026-01-01T10:00:00Z",
+		updated_at: "2026-01-01T10:00:00Z",
+		closed_at: null,
+		merged_at: null,
 		user: { login: "testuser" },
 	},
 	repository: {
@@ -184,12 +188,64 @@ describe("Worker integration", () => {
 				status: "queued",
 				event: "push",
 				deliveryId: "delivery-123",
+				messages: 1,
 			});
 			expect(queueSend).toHaveBeenCalledWith({
 				eventType: "push",
 				deliveryId: "delivery-123",
-				event: pushEvent,
+				event: {
+					ref: pushEvent.ref,
+					repository: pushEvent.repository,
+					commits: [
+						{
+							id: "abc1234",
+							message: "Refs ODP-123",
+							url: pushEvent.commits[0].url,
+							displayTitle: "Fix bug ODP-123",
+							author: { name: "GitHub user", email: "test@example.com" },
+						},
+					],
+				},
 			});
+		});
+
+		it("keeps queued work below the Queue limit for oversized nested push fields", async () => {
+			const largeEvent = {
+				...pushEvent,
+				irrelevant: "x".repeat(200_000),
+				repository: {
+					...pushEvent.repository,
+					irrelevant: "r".repeat(200_000),
+				},
+				commits: [
+					{
+						...pushEvent.commits[0],
+						message: `Refs ODP-123 ${"y".repeat(200_000)}`,
+						author: {
+							...pushEvent.commits[0].author,
+							irrelevant: "a".repeat(200_000),
+						},
+					},
+				],
+			};
+			const response = await worker.fetch(
+				await webhookRequest("push", JSON.stringify(largeEvent)),
+				testEnv,
+			);
+
+			expect(response.status).toBe(202);
+			const queued = queueSend.mock.calls[0][0] as GitHubEventMessage;
+			for (const [message] of queueSend.mock.calls) {
+				expect(new TextEncoder().encode(JSON.stringify(message)).byteLength).toBeLessThan(
+					128 * 1024,
+				);
+			}
+			expect("irrelevant" in queued.event).toBe(false);
+			if (queued.eventType === "push") {
+				expect(queued.event.repository).toEqual(pushEvent.repository);
+				expect(queued.event.commits[0].displayTitle?.length).toBeLessThanOrEqual(1025);
+				expect("irrelevant" in queued.event.commits[0].author).toBe(false);
+			}
 		});
 
 		it("queues pull request events", async () => {
@@ -201,8 +257,57 @@ describe("Worker integration", () => {
 			expect(queueSend).toHaveBeenCalledWith({
 				eventType: "pull_request",
 				deliveryId: "delivery-123",
-				event: pullRequestEvent,
+				event: {
+					action: pullRequestEvent.action,
+					pull_request: {
+						...pullRequestEvent.pull_request,
+						user: { login: "testuser", email: undefined },
+					},
+					repository: pullRequestEvent.repository,
+				},
 			});
+		});
+
+		it("compacts oversized nested PR fields to normalized references", async () => {
+			const largeEvent = {
+				...pullRequestEvent,
+				pull_request: {
+					...pullRequestEvent.pull_request,
+					body: `Refs ODP-123\n${"z".repeat(200_000)}`,
+					irrelevant: "p".repeat(200_000),
+					user: {
+						...pullRequestEvent.pull_request.user,
+						irrelevant: "u".repeat(200_000),
+					},
+				},
+				repository: {
+					...pullRequestEvent.repository,
+					irrelevant: "r".repeat(200_000),
+					owner: {
+						...pullRequestEvent.repository.owner,
+						irrelevant: "o".repeat(200_000),
+					},
+				},
+			};
+			const response = await worker.fetch(
+				await webhookRequest("pull_request", JSON.stringify(largeEvent)),
+				testEnv,
+			);
+
+			expect(response.status).toBe(202);
+			const queued = queueSend.mock.calls[0][0] as GitHubEventMessage;
+			for (const [message] of queueSend.mock.calls) {
+				expect(new TextEncoder().encode(JSON.stringify(message)).byteLength).toBeLessThan(
+					128 * 1024,
+				);
+			}
+			if (queued.eventType === "pull_request") {
+				expect(queued.event.pull_request).toMatchObject({ title: "Refs ODP-123", body: null });
+				expect("irrelevant" in queued.event.pull_request).toBe(false);
+				expect("irrelevant" in queued.event.pull_request.user).toBe(false);
+				expect("irrelevant" in queued.event.repository).toBe(false);
+				expect("irrelevant" in queued.event.repository.owner).toBe(false);
+			}
 		});
 
 		it("acknowledges unsupported event types without queueing", async () => {
@@ -228,6 +333,23 @@ describe("Worker integration", () => {
 			expect(queueSend).not.toHaveBeenCalled();
 		});
 
+		it("queues the same stable ordering metadata when GitHub retries later", async () => {
+			const now = vi.spyOn(Date, "now");
+			now.mockReturnValue(1_000);
+			await worker.fetch(
+				await webhookRequest("pull_request", JSON.stringify(pullRequestEvent)),
+				testEnv,
+			);
+			now.mockReturnValue(9_999_999);
+			await worker.fetch(
+				await webhookRequest("pull_request", JSON.stringify(pullRequestEvent)),
+				testEnv,
+			);
+
+			expect(queueSend).toHaveBeenCalledTimes(2);
+			expect(queueSend.mock.calls[1][0]).toEqual(queueSend.mock.calls[0][0]);
+		});
+
 		it("returns 503 when publishing to the queue fails", async () => {
 			queueSend.mockRejectedValueOnce(new Error("queue unavailable"));
 			const response = await worker.fetch(
@@ -246,8 +368,9 @@ describe("Worker integration", () => {
 		it("processes and acknowledges a push event", async () => {
 			mockOdooResponses([
 				42,
+				[], // exact delivery marker
 				[{ id: 123, name: "Test Task", stage_id: [1, "Todo"] }],
-				[],
+				[], // author lookup
 				[{ id: 1, name: "Note" }],
 				1,
 			]);
@@ -280,11 +403,13 @@ describe("Worker integration", () => {
 		it("processes merged PR transitions before acknowledging", async () => {
 			const fetchSpy = mockOdooResponses([
 				42,
+				[], // exact delivery marker
+				[], // latest delivery marker
 				[{ id: 123, name: "Test Task", stage_id: [1, "Todo"] }],
-				[],
+				true, // set stage
+				[], // author lookup
 				[{ id: 1, name: "Note" }],
 				1,
-				true,
 			]);
 			const mergedEvent = {
 				...pullRequestEvent,
@@ -304,18 +429,20 @@ describe("Worker integration", () => {
 			await worker.queue(batch, testEnv);
 
 			expect(ack).toHaveBeenCalledOnce();
-			expect(fetchSpy).toHaveBeenCalledTimes(6);
+			expect(fetchSpy).toHaveBeenCalledTimes(8);
 		});
 
 		it("resolves configured stage names in the consumer", async () => {
 			mockOdooResponses([
 				42,
+				[], // exact delivery marker
+				[], // latest delivery marker
 				[{ id: 123, name: "Test Task", stage_id: [1, "Todo"] }],
-				[],
-				[{ id: 1, name: "Note" }],
-				1,
 				[{ id: 5, name: "Review" }],
 				true,
+				[], // author lookup
+				[{ id: 1, name: "Note" }],
+				1,
 			]);
 			const env: Env = {
 				...testEnv,

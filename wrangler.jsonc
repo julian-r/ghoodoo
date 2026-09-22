@@ -3,11 +3,8 @@
 	"name": "ghoodoo",
 	"main": "src/index.ts",
 	"compatibility_date": "2024-11-01",
-	"compatibility_flags": ["nodejs_als"],
+	"compatibility_flags": ["nodejs_compat"],
 	"keep_vars": true,
-	"secrets": {
-		"required": ["GITHUB_WEBHOOK_SECRET", "ODOO_API_KEY"]
-	},
 	"queues": {
 		"producers": [
 			{
