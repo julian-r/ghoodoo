@@ -294,6 +294,12 @@ export async function handlePullRequestEvent(
 				continue;
 			}
 
+			// The field is a primary link, not a complete PR history. Never replace
+			// an existing link with a different PR; chatter records every reference.
+			if (!task.github_pr_url) {
+				await odoo.setPrimaryPullRequestUrl(ref.taskId, pr.html_url);
+			}
+
 			const targetStage = getTargetStage(ref.action);
 			if (targetStage) {
 				console.info(
