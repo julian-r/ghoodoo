@@ -63,7 +63,7 @@ describe("OdooClient", () => {
 
 			const client = new OdooClient(baseConfig);
 
-			await expect(client.getTask(123)).rejects.toThrow("Odoo RPC error: Access denied");
+			await expect(client.getTask(123)).rejects.toThrow("Access denied");
 		});
 	});
 
@@ -87,6 +87,20 @@ describe("OdooClient", () => {
 			expect(callBody.params.args[5][0].body).toBe("<p>Test message</p>");
 		});
 
+		it("sets a deterministic message ID for a delivery effect", async () => {
+			fetchSpy = mockFetch([authResponse, { result: [{ id: 1, name: "Note" }] }, { result: 1 }]);
+			const client = new OdooClient(baseConfig);
+
+			await client.addMessage(123, "<p>Test</p>", undefined, {
+				id: "push.delivery-1.task.123",
+			});
+
+			const callBody = JSON.parse((fetchSpy.mock.calls[2][1] as RequestInit).body as string);
+			expect(callBody.params.args[5][0].message_id).toBe(
+				"<ghoodoo.push-delivery-1-task-123.effect@github>",
+			);
+		});
+
 		it("includes author_id when author resolved", async () => {
 			const config: OdooConfig = {
 				...baseConfig,
@@ -107,6 +121,126 @@ describe("OdooClient", () => {
 			// Fourth call is the create
 			const callBody = JSON.parse((fetchSpy.mock.calls[3][1] as RequestInit).body as string);
 			expect(callBody.params.args[5][0].author_id).toBe(20);
+		});
+	});
+
+	describe("getDeliveryEffectStatus", () => {
+		it("recognizes a completed delivery marker", async () => {
+			fetchSpy = mockFetch([authResponse, { result: [{ id: 99 }] }]);
+			const client = new OdooClient(baseConfig);
+
+			const status = await client.getDeliveryEffectStatus(123, {
+				id: "push.delivery-1.task.123",
+			});
+
+			expect(status).toBe("completed");
+		});
+
+		it("recognizes an event older than the latest completed stage effect", async () => {
+			fetchSpy = mockFetch([
+				authResponse,
+				{ result: [] },
+				{
+					result: [
+						{ message_id: "<ghoodoo.pull-request-newer-task-123.stage-2000-closed@github>" },
+					],
+				},
+			]);
+			const client = new OdooClient(baseConfig);
+
+			const status = await client.getDeliveryEffectStatus(123, {
+				id: "pull_request.older.task.123",
+				stageOrder: { occurredAt: 1000, state: "open" },
+			});
+
+			expect(status).toBe("stale");
+		});
+
+		it("does not let push dedupe markers participate in PR stage ordering", async () => {
+			fetchSpy = mockFetch([authResponse, { result: [] }, { result: [] }]);
+			const client = new OdooClient(baseConfig);
+
+			await client.getDeliveryEffectStatus(123, {
+				id: "pull_request.opened.task.123",
+				stageOrder: { occurredAt: 1000, state: "open" },
+			});
+
+			const stageLookup = JSON.parse((fetchSpy.mock.calls[2][1] as RequestInit).body as string);
+			expect(stageLookup.params.args[5][0]).toContainEqual([
+				"message_id",
+				"ilike",
+				"<ghoodoo.%.stage-%@github>",
+			]);
+		});
+
+		it("lets a closed event win over an opened event at the same timestamp", async () => {
+			fetchSpy = mockFetch([
+				authResponse,
+				{ result: [] },
+				{
+					result: [
+						{ message_id: "<ghoodoo.pull-request-closed-task-123.stage-1000-closed@github>" },
+					],
+				},
+			]);
+			const client = new OdooClient(baseConfig);
+
+			const status = await client.getDeliveryEffectStatus(123, {
+				id: "pull_request.opened.task.123",
+				stageOrder: { occurredAt: 1000, state: "open" },
+			});
+
+			expect(status).toBe("stale");
+		});
+
+		it("allows a same-timestamp close after an opened event", async () => {
+			fetchSpy = mockFetch([
+				authResponse,
+				{ result: [] },
+				{
+					result: [{ message_id: "<ghoodoo.pull-request-opened-task-123.stage-1000-open@github>" }],
+				},
+			]);
+			const client = new OdooClient(baseConfig);
+
+			const status = await client.getDeliveryEffectStatus(123, {
+				id: "pull_request.closed.task.123",
+				stageOrder: { occurredAt: 1000, state: "closed" },
+			});
+
+			expect(status).toBe("pending");
+		});
+
+		it("allows a later reopen after a completed close", async () => {
+			fetchSpy = mockFetch([
+				authResponse,
+				{ result: [] },
+				{
+					result: [
+						{ message_id: "<ghoodoo.pull-request-closed-task-123.stage-1000-closed@github>" },
+					],
+				},
+			]);
+			const client = new OdooClient(baseConfig);
+
+			const status = await client.getDeliveryEffectStatus(123, {
+				id: "pull_request.reopened.task.123",
+				stageOrder: { occurredAt: 2000, state: "open" },
+			});
+
+			expect(status).toBe("pending");
+		});
+
+		it("does not compare non-stage effects with stage markers", async () => {
+			fetchSpy = mockFetch([authResponse, { result: [] }]);
+			const client = new OdooClient(baseConfig);
+
+			const status = await client.getDeliveryEffectStatus(123, {
+				id: "pull_request.edited.task.123",
+			});
+
+			expect(status).toBe("pending");
+			expect(fetchSpy).toHaveBeenCalledTimes(2);
 		});
 	});
 
@@ -354,19 +488,13 @@ describe("OdooClient", () => {
 			const client = new OdooClient(config);
 			await client.getTask(123);
 
-			const authHeaders = (fetchSpy.mock.calls[0][1] as RequestInit).headers as Record<
-				string,
-				string
-			>;
-			expect(authHeaders["CF-Access-Client-Id"]).toBe("access-client-id");
-			expect(authHeaders["CF-Access-Client-Secret"]).toBe("access-client-secret");
+			const authHeaders = new Headers((fetchSpy.mock.calls[0][1] as RequestInit).headers);
+			expect(authHeaders.get("CF-Access-Client-Id")).toBe("access-client-id");
+			expect(authHeaders.get("CF-Access-Client-Secret")).toBe("access-client-secret");
 
-			const rpcHeaders = (fetchSpy.mock.calls[1][1] as RequestInit).headers as Record<
-				string,
-				string
-			>;
-			expect(rpcHeaders["CF-Access-Client-Id"]).toBe("access-client-id");
-			expect(rpcHeaders["CF-Access-Client-Secret"]).toBe("access-client-secret");
+			const rpcHeaders = new Headers((fetchSpy.mock.calls[1][1] as RequestInit).headers);
+			expect(rpcHeaders.get("CF-Access-Client-Id")).toBe("access-client-id");
+			expect(rpcHeaders.get("CF-Access-Client-Secret")).toBe("access-client-secret");
 		});
 
 		it("throws a clear error on Access login redirects", async () => {
@@ -384,6 +512,66 @@ describe("OdooClient", () => {
 			await expect(client.getTask(123)).rejects.toThrow(
 				"Cloudflare Access login redirect detected",
 			);
+		});
+
+		it("rejects Access redirects under explicit JSON-2", async () => {
+			fetchSpy = vi.spyOn(global, "fetch").mockResolvedValue(
+				new Response("", {
+					status: 302,
+					headers: {
+						Location:
+							"https://makespan.cloudflareaccess.com/cdn-cgi/access/login/odoo.makespan.com",
+					},
+				}),
+			);
+			const client = new OdooClient({ ...baseConfig, protocol: "json2" });
+
+			await expect(client.getTask(123)).rejects.toThrow(
+				"Cloudflare Access login redirect detected",
+			);
+		});
+
+		it("rejects non-JSON responses under explicit JSON-2", async () => {
+			fetchSpy = vi.spyOn(global, "fetch").mockResolvedValue(
+				new Response("<!DOCTYPE html><html><body>Access login</body></html>", {
+					status: 200,
+					headers: { "Content-Type": "text/html" },
+				}),
+			);
+			const client = new OdooClient({ ...baseConfig, protocol: "json2" });
+
+			await expect(client.getTask(123)).rejects.toThrow("returned non-JSON response");
+		});
+
+		it("rejects persistent Access redirects after auto falls back to JSON-RPC", async () => {
+			fetchSpy = vi.spyOn(global, "fetch").mockResolvedValue(
+				new Response("", {
+					status: 302,
+					headers: {
+						Location:
+							"https://makespan.cloudflareaccess.com/cdn-cgi/access/login/odoo.makespan.com",
+					},
+				}),
+			);
+			const client = new OdooClient({ ...baseConfig, protocol: "auto" });
+
+			await expect(client.getTask(123)).rejects.toThrow(
+				"Cloudflare Access login redirect detected",
+			);
+			expect(fetchSpy).toHaveBeenCalledTimes(2);
+		});
+
+		it("rejects persistent non-JSON responses after auto falls back to JSON-RPC", async () => {
+			fetchSpy = vi.spyOn(global, "fetch").mockResolvedValue(
+				new Response("<!DOCTYPE html><html><body>Access login</body></html>", {
+					status: 200,
+					headers: { "Content-Type": "text/html" },
+				}),
+			);
+			const client = new OdooClient({ ...baseConfig, protocol: "auto" });
+
+			await expect(client.getTask(123)).rejects.toThrow("returned non-JSON response");
+			expect(fetchSpy).toHaveBeenCalledTimes(2);
 		});
 
 		it("throws a clear error when HTML is returned instead of JSON", async () => {

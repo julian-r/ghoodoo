@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import worker, { type Env } from "../src/index.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { type Env, type GitHubEventMessage, handleQueue, handleWebhook } from "../src/index.js";
 
-// Helper to create valid webhook signature
+const worker = { fetch: handleWebhook, queue: handleQueue };
+
 async function createSignature(payload: string, secret: string): Promise<string> {
 	const encoder = new TextEncoder();
 	const key = await crypto.subtle.importKey(
@@ -13,11 +14,18 @@ async function createSignature(payload: string, secret: string): Promise<string>
 	);
 	const signatureBytes = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
 	return `sha256=${Array.from(new Uint8Array(signatureBytes))
-		.map((b) => b.toString(16).padStart(2, "0"))
+		.map((byte) => byte.toString(16).padStart(2, "0"))
 		.join("")}`;
 }
 
+const queueSend = vi.fn(async (_message: unknown) => undefined);
+const queueBinding = {
+	send: queueSend,
+	sendBatch: vi.fn(async () => undefined),
+} as unknown as Queue;
+
 const testEnv: Env = {
+	GITHUB_EVENTS_QUEUE: queueBinding,
 	GITHUB_WEBHOOK_SECRET: "test-secret",
 	ODOO_URL: "https://odoo.example.com",
 	ODOO_DATABASE: "test_db",
@@ -26,406 +34,429 @@ const testEnv: Env = {
 	ODOO_STAGE_DONE: "5",
 };
 
-describe("Worker Integration", () => {
-	let fetchSpy: ReturnType<typeof vi.spyOn>;
+const pushEvent = {
+	ref: "refs/heads/main",
+	repository: {
+		full_name: "owner/repo",
+		html_url: "https://github.com/owner/repo",
+	},
+	commits: [
+		{
+			id: "abc1234567890",
+			message: "Fix bug ODP-123",
+			url: "https://github.com/owner/repo/commit/abc1234567890",
+			author: { name: "Test User", email: "test@example.com" },
+		},
+	],
+};
 
-	// Mock Odoo responses
-	function mockOdooResponses(responses: unknown[]) {
-		let callIndex = 0;
-		fetchSpy = vi.spyOn(global, "fetch").mockImplementation(async (url) => {
-			// Only mock Odoo calls, not GitHub
-			if (typeof url === "string" && url.includes("odoo.example.com")) {
-				const response = responses[callIndex++] || responses[responses.length - 1];
-				return new Response(JSON.stringify({ jsonrpc: "2.0", id: callIndex, result: response }), {
-					status: 200,
-				});
-			}
-			return new Response("Not mocked", { status: 500 });
-		});
-	}
+const pullRequestEvent = {
+	action: "opened",
+	pull_request: {
+		number: 42,
+		title: "Refs ODP-123",
+		body: null,
+		html_url: "https://github.com/owner/repo/pull/42",
+		merged: false,
+		draft: false,
+		created_at: "2026-01-01T10:00:00Z",
+		updated_at: "2026-01-01T10:00:00Z",
+		closed_at: null,
+		merged_at: null,
+		user: { login: "testuser" },
+	},
+	repository: {
+		owner: { login: "owner" },
+		name: "repo",
+		full_name: "owner/repo",
+	},
+};
 
-	afterEach(() => {
-		fetchSpy?.mockRestore();
+async function webhookRequest(eventType: string, body: string): Promise<Request> {
+	return new Request("http://localhost/webhook", {
+		method: "POST",
+		body,
+		headers: {
+			"x-github-event": eventType,
+			"x-github-delivery": "delivery-123",
+			"x-hub-signature-256": await createSignature(body, "test-secret"),
+		},
+	});
+}
+
+function mockOdooResponses(responses: unknown[]): ReturnType<typeof vi.spyOn> {
+	let callIndex = 0;
+	return vi.spyOn(global, "fetch").mockImplementation(async (url) => {
+		if (typeof url === "string" && url.includes("odoo.example.com")) {
+			const response = responses[callIndex++] ?? responses.at(-1);
+			return Response.json({ jsonrpc: "2.0", id: callIndex, result: response });
+		}
+		return new Response("Not mocked", { status: 500 });
+	});
+}
+
+function queueBatch(body: GitHubEventMessage, attempts = 1) {
+	const ack = vi.fn();
+	const retry = vi.fn();
+	const message: Message<GitHubEventMessage> = {
+		id: "queue-message-1",
+		timestamp: new Date(),
+		body,
+		attempts,
+		ack,
+		retry,
+	};
+	const batch: MessageBatch<GitHubEventMessage> = {
+		queue: "ghoodoo-events",
+		messages: [message],
+		metadata: {
+			metrics: { backlogCount: 1, backlogBytes: 1 },
+		},
+		ackAll: vi.fn(),
+		retryAll: vi.fn(),
+	};
+	return { batch, ack, retry };
+}
+
+describe("Worker integration", () => {
+	beforeEach(() => {
+		queueSend.mockReset();
+		queueSend.mockResolvedValue(undefined);
 	});
 
-	describe("request validation", () => {
-		it("rejects non-POST requests", async () => {
-			const request = new Request("http://localhost/webhook", { method: "GET" });
-			const response = await worker.fetch(request, testEnv);
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
 
+	describe("webhook producer", () => {
+		it("rejects non-POST requests", async () => {
+			const response = await worker.fetch(
+				new Request("http://localhost/webhook", { method: "GET" }),
+				testEnv,
+			);
 			expect(response.status).toBe(405);
 			expect(await response.text()).toBe("Method not allowed");
 		});
 
 		it("returns 404 for non-webhook paths", async () => {
-			const request = new Request("http://localhost/other", { method: "POST" });
-			const response = await worker.fetch(request, testEnv);
-
+			const response = await worker.fetch(
+				new Request("http://localhost/other", { method: "POST" }),
+				testEnv,
+			);
 			expect(response.status).toBe(404);
 		});
 
-		it("rejects requests without event type header", async () => {
-			const request = new Request("http://localhost/webhook", {
-				method: "POST",
-				body: "{}",
-			});
-			const response = await worker.fetch(request, testEnv);
-
+		it("rejects requests without an event type", async () => {
+			const response = await worker.fetch(
+				new Request("http://localhost/webhook", { method: "POST", body: "{}" }),
+				testEnv,
+			);
 			expect(response.status).toBe(400);
 			expect(await response.text()).toBe("Missing event type");
 		});
 
-		it("rejects requests with invalid signature", async () => {
-			const request = new Request("http://localhost/webhook", {
-				method: "POST",
-				body: "{}",
-				headers: {
-					"x-github-event": "push",
-					"x-hub-signature-256": "sha256=invalid",
-				},
-			});
-			const response = await worker.fetch(request, testEnv);
-
+		it("rejects invalid signatures", async () => {
+			const response = await worker.fetch(
+				new Request("http://localhost/webhook", {
+					method: "POST",
+					body: "{}",
+					headers: {
+						"x-github-event": "push",
+						"x-hub-signature-256": "sha256=invalid",
+					},
+				}),
+				testEnv,
+			);
 			expect(response.status).toBe(401);
-			expect(await response.text()).toBe("Invalid signature");
 		});
-	});
 
-	describe("ping event", () => {
-		it("responds to ping events", async () => {
-			const payload = '{"zen":"test"}';
-			const signature = await createSignature(payload, "test-secret");
+		it("responds to ping events without queueing", async () => {
+			const response = await worker.fetch(await webhookRequest("ping", '{"zen":"test"}'), testEnv);
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({ status: "ok", event: "ping" });
+			expect(queueSend).not.toHaveBeenCalled();
+		});
 
-			const request = new Request("http://localhost/webhook", {
-				method: "POST",
-				body: payload,
-				headers: {
-					"x-github-event": "ping",
-					"x-hub-signature-256": signature,
+		it("queues push events and responds with 202", async () => {
+			const response = await worker.fetch(
+				await webhookRequest("push", JSON.stringify(pushEvent)),
+				testEnv,
+			);
+
+			expect(response.status).toBe(202);
+			expect(await response.json()).toEqual({
+				status: "queued",
+				event: "push",
+				deliveryId: "delivery-123",
+				messages: 1,
+			});
+			expect(queueSend).toHaveBeenCalledWith({
+				eventType: "push",
+				deliveryId: "delivery-123",
+				event: {
+					ref: pushEvent.ref,
+					repository: pushEvent.repository,
+					commits: [
+						{
+							id: "abc1234",
+							message: "Refs ODP-123",
+							url: pushEvent.commits[0].url,
+							displayTitle: "Fix bug ODP-123",
+							author: { name: "GitHub user", email: "test@example.com" },
+						},
+					],
 				},
 			});
-			const response = await worker.fetch(request, testEnv);
-
-			expect(response.status).toBe(200);
-			const json = await response.json();
-			expect(json).toEqual({ status: "ok", event: "ping" });
 		});
-	});
 
-	describe("push event", () => {
-		it("processes push event with ODP reference", async () => {
-			mockOdooResponses([
-				42, // auth
-				[{ id: 123, name: "Test Task", stage_id: [1, "Todo"] }], // getTask
-				[{ id: 1, name: "Note" }], // getNoteSubtypeId
-				1, // addMessage
-			]);
-
-			const payload = JSON.stringify({
-				ref: "refs/heads/main",
+		it("keeps queued work below the Queue limit for oversized nested push fields", async () => {
+			const largeEvent = {
+				...pushEvent,
+				irrelevant: "x".repeat(200_000),
 				repository: {
-					full_name: "owner/repo",
-					html_url: "https://github.com/owner/repo",
+					...pushEvent.repository,
+					irrelevant: "r".repeat(200_000),
 				},
 				commits: [
 					{
-						id: "abc1234567890",
-						message: "Fix bug ODP-123",
-						url: "https://github.com/owner/repo/commit/abc1234567890",
-						author: { name: "Test User", email: "test@example.com" },
+						...pushEvent.commits[0],
+						message: `Refs ODP-123 ${"y".repeat(200_000)}`,
+						author: {
+							...pushEvent.commits[0].author,
+							irrelevant: "a".repeat(200_000),
+						},
 					},
 				],
-			});
-			const signature = await createSignature(payload, "test-secret");
-
-			const request = new Request("http://localhost/webhook", {
-				method: "POST",
-				body: payload,
-				headers: {
-					"x-github-event": "push",
-					"x-hub-signature-256": signature,
-				},
-			});
-			const response = await worker.fetch(request, testEnv);
-
-			expect(response.status).toBe(200);
-			const json = (await response.json()) as {
-				status: string;
-				processed: number;
-				errors: string[];
 			};
-			expect(json.status).toBe("ok");
-			expect(json.processed).toBe(1);
-			expect(json.errors).toHaveLength(0);
+			const response = await worker.fetch(
+				await webhookRequest("push", JSON.stringify(largeEvent)),
+				testEnv,
+			);
+
+			expect(response.status).toBe(202);
+			const queued = queueSend.mock.calls[0][0] as GitHubEventMessage;
+			for (const [message] of queueSend.mock.calls) {
+				expect(new TextEncoder().encode(JSON.stringify(message)).byteLength).toBeLessThan(
+					128 * 1024,
+				);
+			}
+			expect("irrelevant" in queued.event).toBe(false);
+			if (queued.eventType === "push") {
+				expect(queued.event.repository).toEqual(pushEvent.repository);
+				expect(queued.event.commits[0].displayTitle?.length).toBeLessThanOrEqual(1025);
+				expect("irrelevant" in queued.event.commits[0].author).toBe(false);
+			}
 		});
 
-		it("reports errors for missing tasks", async () => {
-			mockOdooResponses([
-				42, // auth
-				[], // getTask returns empty
-			]);
-
-			const payload = JSON.stringify({
-				ref: "refs/heads/main",
-				repository: {
-					full_name: "owner/repo",
-					html_url: "https://github.com/owner/repo",
-				},
-				commits: [
-					{
-						id: "abc1234567890",
-						message: "Fix bug ODP-999",
-						url: "https://github.com/owner/repo/commit/abc1234567890",
-						author: { name: "Test User" },
+		it("queues pull request events", async () => {
+			const response = await worker.fetch(
+				await webhookRequest("pull_request", JSON.stringify(pullRequestEvent)),
+				testEnv,
+			);
+			expect(response.status).toBe(202);
+			expect(queueSend).toHaveBeenCalledWith({
+				eventType: "pull_request",
+				deliveryId: "delivery-123",
+				event: {
+					action: pullRequestEvent.action,
+					pull_request: {
+						...pullRequestEvent.pull_request,
+						user: { login: "testuser", email: undefined },
 					},
-				],
-			});
-			const signature = await createSignature(payload, "test-secret");
-
-			const request = new Request("http://localhost/webhook", {
-				method: "POST",
-				body: payload,
-				headers: {
-					"x-github-event": "push",
-					"x-hub-signature-256": signature,
+					repository: pullRequestEvent.repository,
 				},
 			});
-			const response = await worker.fetch(request, testEnv);
+		});
 
+		it("compacts oversized nested PR fields to normalized references", async () => {
+			const largeEvent = {
+				...pullRequestEvent,
+				pull_request: {
+					...pullRequestEvent.pull_request,
+					body: `Refs ODP-123\n${"z".repeat(200_000)}`,
+					irrelevant: "p".repeat(200_000),
+					user: {
+						...pullRequestEvent.pull_request.user,
+						irrelevant: "u".repeat(200_000),
+					},
+				},
+				repository: {
+					...pullRequestEvent.repository,
+					irrelevant: "r".repeat(200_000),
+					owner: {
+						...pullRequestEvent.repository.owner,
+						irrelevant: "o".repeat(200_000),
+					},
+				},
+			};
+			const response = await worker.fetch(
+				await webhookRequest("pull_request", JSON.stringify(largeEvent)),
+				testEnv,
+			);
+
+			expect(response.status).toBe(202);
+			const queued = queueSend.mock.calls[0][0] as GitHubEventMessage;
+			for (const [message] of queueSend.mock.calls) {
+				expect(new TextEncoder().encode(JSON.stringify(message)).byteLength).toBeLessThan(
+					128 * 1024,
+				);
+			}
+			if (queued.eventType === "pull_request") {
+				expect(queued.event.pull_request).toMatchObject({ title: "Refs ODP-123", body: null });
+				expect("irrelevant" in queued.event.pull_request).toBe(false);
+				expect("irrelevant" in queued.event.pull_request.user).toBe(false);
+				expect("irrelevant" in queued.event.repository).toBe(false);
+				expect("irrelevant" in queued.event.repository.owner).toBe(false);
+			}
+		});
+
+		it("acknowledges unsupported event types without queueing", async () => {
+			const response = await worker.fetch(
+				await webhookRequest("issues", '{"action":"created"}'),
+				testEnv,
+			);
 			expect(response.status).toBe(200);
-			const json = (await response.json()) as { processed: number; errors: string[] };
-			expect(json.processed).toBe(0);
-			expect(json.errors).toContain("ODP-999: Task not found");
+			expect(await response.json()).toEqual({
+				status: "ok",
+				event: "issues",
+				message: "Event type not handled",
+			});
+			expect(queueSend).not.toHaveBeenCalled();
+		});
+
+		it("rejects malformed JSON before queueing", async () => {
+			const response = await worker.fetch(
+				await webhookRequest("push", "invalid json {{{"),
+				testEnv,
+			);
+			expect(response.status).toBe(400);
+			expect(queueSend).not.toHaveBeenCalled();
+		});
+
+		it("queues the same stable ordering metadata when GitHub retries later", async () => {
+			const now = vi.spyOn(Date, "now");
+			now.mockReturnValue(1_000);
+			await worker.fetch(
+				await webhookRequest("pull_request", JSON.stringify(pullRequestEvent)),
+				testEnv,
+			);
+			now.mockReturnValue(9_999_999);
+			await worker.fetch(
+				await webhookRequest("pull_request", JSON.stringify(pullRequestEvent)),
+				testEnv,
+			);
+
+			expect(queueSend).toHaveBeenCalledTimes(2);
+			expect(queueSend.mock.calls[1][0]).toEqual(queueSend.mock.calls[0][0]);
+		});
+
+		it("returns 503 when publishing to the queue fails", async () => {
+			queueSend.mockRejectedValueOnce(new Error("queue unavailable"));
+			const response = await worker.fetch(
+				await webhookRequest("push", JSON.stringify(pushEvent)),
+				testEnv,
+			);
+			expect(response.status).toBe(503);
+			expect(await response.json()).toEqual({
+				status: "error",
+				message: "Failed to enqueue event",
+			});
 		});
 	});
 
-	describe("pull_request event", () => {
-		it("processes PR open event", async () => {
+	describe("queue consumer", () => {
+		it("processes and acknowledges a push event", async () => {
 			mockOdooResponses([
-				42, // auth
-				[{ id: 456, name: "Test Task", stage_id: [1, "Todo"] }], // getTask
-				[{ id: 1, name: "Note" }], // getNoteSubtypeId
-				1, // addMessage
+				42,
+				[], // exact delivery marker
+				[{ id: 123, name: "Test Task", stage_id: [1, "Todo"] }],
+				[], // author lookup
+				[{ id: 1, name: "Note" }],
+				1,
 			]);
-
-			const payload = JSON.stringify({
-				action: "opened",
-				pull_request: {
-					number: 42,
-					title: "Refs ODP-456",
-					body: null,
-					html_url: "https://github.com/owner/repo/pull/42",
-					merged: false,
-					draft: false,
-					user: { login: "testuser" },
-				},
-				repository: {
-					owner: { login: "owner" },
-					name: "repo",
-					full_name: "owner/repo",
-				},
+			const { batch, ack, retry } = queueBatch({
+				eventType: "push",
+				deliveryId: "delivery-123",
+				event: pushEvent,
 			});
-			const signature = await createSignature(payload, "test-secret");
 
-			const request = new Request("http://localhost/webhook", {
-				method: "POST",
-				body: payload,
-				headers: {
-					"x-github-event": "pull_request",
-					"x-hub-signature-256": signature,
-				},
-			});
-			const response = await worker.fetch(request, testEnv);
+			await worker.queue(batch, testEnv);
 
-			expect(response.status).toBe(200);
-			const json = (await response.json()) as { status: string; processed: number };
-			expect(json.status).toBe("ok");
-			expect(json.processed).toBe(1);
+			expect(ack).toHaveBeenCalledOnce();
+			expect(retry).not.toHaveBeenCalled();
 		});
 
-		it("sets done stage when PR with close keyword is merged", async () => {
-			mockOdooResponses([
-				42, // auth
-				[{ id: 123, name: "Test Task", stage_id: [1, "Todo"] }], // getTask
-				[{ id: 1, name: "Note" }], // getNoteSubtypeId
-				1, // addMessage
-				true, // setStage
-			]);
+		it("retries a message when event processing reports an error", async () => {
+			mockOdooResponses([42, []]);
+			const { batch, ack, retry } = queueBatch({
+				eventType: "push",
+				deliveryId: "delivery-123",
+				event: pushEvent,
+			});
 
-			const payload = JSON.stringify({
+			await worker.queue(batch, testEnv);
+
+			expect(retry).toHaveBeenCalledOnce();
+			expect(ack).not.toHaveBeenCalled();
+		});
+
+		it("processes merged PR transitions before acknowledging", async () => {
+			const fetchSpy = mockOdooResponses([
+				42,
+				[], // exact delivery marker
+				[], // latest delivery marker
+				[{ id: 123, name: "Test Task", stage_id: [1, "Todo"] }],
+				true, // set stage
+				[], // author lookup
+				[{ id: 1, name: "Note" }],
+				1,
+			]);
+			const mergedEvent = {
+				...pullRequestEvent,
 				action: "closed",
 				pull_request: {
-					number: 42,
+					...pullRequestEvent.pull_request,
 					title: "Closes ODP-123",
-					body: null,
-					html_url: "https://github.com/owner/repo/pull/42",
 					merged: true,
-					draft: false,
-					user: { login: "testuser" },
 				},
-				repository: {
-					owner: { login: "owner" },
-					name: "repo",
-					full_name: "owner/repo",
-				},
-			});
-			const signature = await createSignature(payload, "test-secret");
-
-			const request = new Request("http://localhost/webhook", {
-				method: "POST",
-				body: payload,
-				headers: {
-					"x-github-event": "pull_request",
-					"x-hub-signature-256": signature,
-				},
-			});
-			const response = await worker.fetch(request, testEnv);
-
-			expect(response.status).toBe(200);
-			// Verify setStage was called (auth, getTask, resolveAuthorPartnerId, getNoteSubtype, addMessage, setStage = 6 calls)
-			expect(fetchSpy).toHaveBeenCalledTimes(6);
-		});
-	});
-
-	describe("unhandled events", () => {
-		it("acknowledges unhandled event types", async () => {
-			const payload = '{"action":"created"}';
-			const signature = await createSignature(payload, "test-secret");
-
-			const request = new Request("http://localhost/webhook", {
-				method: "POST",
-				body: payload,
-				headers: {
-					"x-github-event": "issues",
-					"x-hub-signature-256": signature,
-				},
-			});
-			const response = await worker.fetch(request, testEnv);
-
-			expect(response.status).toBe(200);
-			const json = (await response.json()) as { status: string; event: string; message: string };
-			expect(json.status).toBe("ok");
-			expect(json.event).toBe("issues");
-			expect(json.message).toBe("Event type not handled");
-		});
-	});
-
-	describe("error handling", () => {
-		it("returns 500 on handler errors", async () => {
-			const payload = "invalid json {{{";
-			const signature = await createSignature(payload, "test-secret");
-
-			const request = new Request("http://localhost/webhook", {
-				method: "POST",
-				body: payload,
-				headers: {
-					"x-github-event": "push",
-					"x-hub-signature-256": signature,
-				},
-			});
-			const response = await worker.fetch(request, testEnv);
-
-			expect(response.status).toBe(500);
-			const json = (await response.json()) as { status: string; message: string };
-			expect(json.status).toBe("error");
-		});
-	});
-
-	describe("configuration parsing", () => {
-		it("parses stage IDs as numbers", async () => {
-			mockOdooResponses([
-				42, // auth
-				[{ id: 123, name: "Test Task", stage_id: [1, "Todo"] }],
-				[{ id: 1, name: "Note" }], // getNoteSubtypeId
-				1, // addMessage
-				true, // setStage
-			]);
-
-			const envWithStages: Env = {
-				...testEnv,
-				ODOO_STAGE_DONE: "10",
-				ODOO_STAGE_IN_PROGRESS: "5",
-				ODOO_STAGE_CANCELED: "15",
 			};
-
-			const payload = JSON.stringify({
-				action: "opened",
-				pull_request: {
-					number: 42,
-					title: "Refs ODP-123",
-					body: null,
-					html_url: "https://github.com/owner/repo/pull/42",
-					merged: false,
-					draft: false,
-					user: { login: "testuser" },
-				},
-				repository: {
-					owner: { login: "owner" },
-					name: "repo",
-					full_name: "owner/repo",
-				},
-			});
-			const signature = await createSignature(payload, "test-secret");
-
-			const request = new Request("http://localhost/webhook", {
-				method: "POST",
-				body: payload,
-				headers: {
-					"x-github-event": "pull_request",
-					"x-hub-signature-256": signature,
-				},
+			const { batch, ack } = queueBatch({
+				eventType: "pull_request",
+				deliveryId: "delivery-123",
+				event: mergedEvent,
 			});
 
-			const response = await worker.fetch(request, envWithStages);
-			expect(response.status).toBe(200);
+			await worker.queue(batch, testEnv);
+
+			expect(ack).toHaveBeenCalledOnce();
+			expect(fetchSpy).toHaveBeenCalledTimes(8);
 		});
 
-		it("parses stage names as strings", async () => {
+		it("resolves configured stage names in the consumer", async () => {
 			mockOdooResponses([
-				42, // auth
+				42,
+				[], // exact delivery marker
+				[], // latest delivery marker
 				[{ id: 123, name: "Test Task", stage_id: [1, "Todo"] }],
-				[{ id: 1, name: "Note" }], // getNoteSubtypeId
-				1, // addMessage
-				[{ id: 5, name: "In Progress" }], // resolveStage
-				true, // setStage
+				[{ id: 5, name: "Review" }],
+				true,
+				[], // author lookup
+				[{ id: 1, name: "Note" }],
+				1,
 			]);
-
-			const envWithStageNames: Env = {
+			const env: Env = {
 				...testEnv,
-				ODOO_STAGE_DONE: "Done",
-				ODOO_STAGE_IN_PROGRESS: "In Progress",
+				ODOO_STAGE_IN_PROGRESS: "Review",
 			};
-
-			const payload = JSON.stringify({
-				action: "opened",
-				pull_request: {
-					number: 42,
-					title: "Refs ODP-123",
-					body: null,
-					html_url: "https://github.com/owner/repo/pull/42",
-					merged: false,
-					draft: false,
-					user: { login: "testuser" },
-				},
-				repository: {
-					owner: { login: "owner" },
-					name: "repo",
-					full_name: "owner/repo",
-				},
-			});
-			const signature = await createSignature(payload, "test-secret");
-
-			const request = new Request("http://localhost/webhook", {
-				method: "POST",
-				body: payload,
-				headers: {
-					"x-github-event": "pull_request",
-					"x-hub-signature-256": signature,
-				},
+			const { batch, ack } = queueBatch({
+				eventType: "pull_request",
+				deliveryId: "delivery-123",
+				event: pullRequestEvent,
 			});
 
-			const response = await worker.fetch(request, envWithStageNames);
-			expect(response.status).toBe(200);
+			await worker.queue(batch, env);
+
+			expect(ack).toHaveBeenCalledOnce();
 		});
 	});
 });

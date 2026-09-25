@@ -18,6 +18,7 @@ function createMockOdooClient(overrides: Partial<OdooClient> = {}): OdooClient {
 		getPartnerIdForUser: vi.fn().mockResolvedValue(null),
 		resolveAuthorPartnerId: vi.fn().mockResolvedValue(null),
 		resolveAuthorLink: vi.fn().mockResolvedValue("@testuser"),
+		getDeliveryEffectStatus: vi.fn().mockResolvedValue("pending"),
 		stages: { done: 5, inProgress: 2, canceled: 6 },
 		...overrides,
 	} as unknown as OdooClient;
@@ -190,6 +191,68 @@ describe("handlePushEvent", () => {
 		expect(result.errors).toHaveLength(0);
 		expect(odoo.getTask).not.toHaveBeenCalled();
 	});
+
+	it("does not replay a completed delivery effect", async () => {
+		const odoo = createMockOdooClient({
+			getDeliveryEffectStatus: vi.fn().mockResolvedValue("completed"),
+		});
+		const event: PushEvent = {
+			...basePushEvent,
+			commits: [
+				{
+					id: "abc1234567890",
+					message: "Closes ODP-123",
+					url: "https://github.com/owner/repo/commit/abc1234567890",
+					author: { name: "Test User" },
+				},
+			],
+		};
+
+		const result = await handlePushEvent(event, odoo, {
+			deliveryId: "delivery-1",
+		});
+
+		expect(result.errors).toHaveLength(0);
+		expect(odoo.getTask).not.toHaveBeenCalled();
+		expect(odoo.setStage).not.toHaveBeenCalled();
+		expect(odoo.addMessage).not.toHaveBeenCalled();
+	});
+
+	it("does not replay successful tasks when a mixed result retries", async () => {
+		const status = vi
+			.fn()
+			.mockResolvedValueOnce("pending")
+			.mockResolvedValueOnce("pending")
+			.mockResolvedValueOnce("completed")
+			.mockResolvedValueOnce("pending");
+		const odoo = createMockOdooClient({
+			getDeliveryEffectStatus: status,
+			getTask: vi.fn(async (taskId: number) =>
+				taskId === 123
+					? { id: 123, name: "Task", stage_id: [1, "Todo"] as [number, string] }
+					: null,
+			),
+		});
+		const event: PushEvent = {
+			...basePushEvent,
+			commits: [
+				{
+					id: "abc1234567890",
+					message: "Refs ODP-123 and ODP-999",
+					url: "https://github.com/owner/repo/commit/abc1234567890",
+					author: { name: "Test User" },
+				},
+			],
+		};
+		const context = { deliveryId: "delivery-1" };
+
+		const first = await handlePushEvent(event, odoo, context);
+		const retry = await handlePushEvent(event, odoo, context);
+
+		expect(first.errors).toContain("ODP-999: Task not found");
+		expect(retry.errors).toContain("ODP-999: Task not found");
+		expect(odoo.addMessage).toHaveBeenCalledTimes(1);
+	});
 });
 
 describe("handlePullRequestEvent", () => {
@@ -202,6 +265,10 @@ describe("handlePullRequestEvent", () => {
 			html_url: "https://github.com/owner/repo/pull/42",
 			merged: false,
 			draft: false,
+			created_at: "2026-01-01T10:00:00Z",
+			updated_at: "2026-01-01T10:00:00Z",
+			closed_at: null,
+			merged_at: null,
 			user: { login: "testuser" },
 		},
 		repository: {
@@ -329,6 +396,86 @@ describe("handlePullRequestEvent", () => {
 		expect(odoo.setStage).toHaveBeenCalledWith(123, 2);
 	});
 
+	it("does not let an older retried event overwrite a newer task state", async () => {
+		const odoo = createMockOdooClient({
+			getDeliveryEffectStatus: vi.fn().mockResolvedValue("stale"),
+		});
+		const event: PullRequestEvent = {
+			...basePREvent,
+			pull_request: {
+				...basePREvent.pull_request,
+				title: "Refs ODP-123",
+			},
+		};
+
+		await handlePullRequestEvent(event, odoo, null, {
+			deliveryId: "older-delivery",
+		});
+
+		expect(odoo.setStage).not.toHaveBeenCalled();
+		expect(odoo.addMessage).not.toHaveBeenCalled();
+	});
+
+	it("does not let an edited marker suppress an opened stage transition", async () => {
+		const status = vi.fn().mockResolvedValue("pending");
+		const odoo = createMockOdooClient({ getDeliveryEffectStatus: status });
+		const edited: PullRequestEvent = {
+			...basePREvent,
+			action: "edited",
+			pull_request: {
+				...basePREvent.pull_request,
+				title: "Refs ODP-123",
+				updated_at: "2026-01-01T10:01:00Z",
+			},
+		};
+		const opened: PullRequestEvent = {
+			...basePREvent,
+			pull_request: {
+				...basePREvent.pull_request,
+				title: "Refs ODP-123",
+			},
+		};
+
+		await handlePullRequestEvent(edited, odoo, null, { deliveryId: "edited-delivery" });
+		await handlePullRequestEvent(opened, odoo, null, { deliveryId: "opened-delivery" });
+
+		expect(status.mock.calls[0][1]).toEqual({
+			id: "pull_request.edited-delivery.task.123",
+			stageOrder: undefined,
+		});
+		expect(status.mock.calls[1][1]).toEqual({
+			id: "pull_request.opened-delivery.task.123",
+			stageOrder: { occurredAt: Date.parse("2026-01-01T10:00:00Z"), state: "open" },
+		});
+	});
+
+	it("records delivery completion only after the stage transition", async () => {
+		const odoo = createMockOdooClient();
+		const event: PullRequestEvent = {
+			...basePREvent,
+			pull_request: {
+				...basePREvent.pull_request,
+				title: "Refs ODP-123",
+			},
+		};
+
+		await handlePullRequestEvent(event, odoo, null, {
+			deliveryId: "delivery-1",
+		});
+
+		const setStage = vi.mocked(odoo.setStage);
+		const addMessage = vi.mocked(odoo.addMessage);
+		expect(setStage.mock.invocationCallOrder[0]).toBeLessThan(
+			addMessage.mock.invocationCallOrder[0],
+		);
+		expect(addMessage).toHaveBeenCalledWith(
+			123,
+			expect.stringContaining("#42"),
+			"testuser",
+			expect.objectContaining({ id: "pull_request.delivery-1.task.123" }),
+		);
+	});
+
 	it("ignores unhandled PR actions", async () => {
 		const odoo = createMockOdooClient();
 		const event: PullRequestEvent = {
@@ -391,6 +538,26 @@ describe("handlePullRequestEvent", () => {
 			}),
 		);
 
+		fetchSpy.mockRestore();
+	});
+
+	it("does not fail required processing when the GitHub comment fails", async () => {
+		const odoo = createMockOdooClient();
+		const event: PullRequestEvent = {
+			...basePREvent,
+			pull_request: {
+				...basePREvent.pull_request,
+				title: "Refs ODP-123",
+			},
+		};
+		const fetchSpy = vi
+			.spyOn(global, "fetch")
+			.mockResolvedValue(new Response("failed", { status: 500 }));
+
+		const result = await handlePullRequestEvent(event, odoo, { token: "test-token" });
+
+		expect(result.processed).toBe(1);
+		expect(result.errors).toHaveLength(0);
 		fetchSpy.mockRestore();
 	});
 
