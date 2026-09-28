@@ -261,8 +261,7 @@ export async function handlePullRequestEvent(
 	const isMerged = event.action === "closed" && pr.merged;
 	const isClosed = event.action === "closed" && !pr.merged;
 	const isOpened =
-		((event.action === "opened" || event.action === "reopened") && !pr.draft) ||
-		event.action === "ready_for_review";
+		event.action === "opened" || event.action === "reopened" || event.action === "ready_for_review";
 	const stageOrder = pullRequestStageOrder(event, isOpened, isClosed, isMerged);
 	const updatedTasks: string[] = [];
 

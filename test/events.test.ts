@@ -443,7 +443,7 @@ describe("handlePullRequestEvent", () => {
 		expect(odoo.setStage).toHaveBeenCalledWith(123, 6); // canceled stage
 	});
 
-	it("does not set inProgress stage when draft PR is opened", async () => {
+	it("sets inProgress stage when a draft PR is opened", async () => {
 		const odoo = createMockOdooClient();
 		const event: PullRequestEvent = {
 			...basePREvent,
@@ -458,7 +458,7 @@ describe("handlePullRequestEvent", () => {
 		await handlePullRequestEvent(event, odoo, null);
 
 		expect(odoo.addMessage).toHaveBeenCalled();
-		expect(odoo.setStage).not.toHaveBeenCalled();
+		expect(odoo.setStage).toHaveBeenCalledWith(123, 2);
 	});
 
 	it("sets inProgress stage when draft PR is marked ready for review", async () => {
