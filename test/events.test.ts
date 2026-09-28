@@ -13,6 +13,7 @@ function createMockOdooClient(overrides: Partial<OdooClient> = {}): OdooClient {
 		getTask: vi.fn().mockResolvedValue({ id: 123, name: "Test Task", stage_id: [1, "Todo"] }),
 		addMessage: vi.fn().mockResolvedValue(1),
 		setStage: vi.fn().mockResolvedValue(true),
+		setPrimaryPullRequestUrl: vi.fn().mockResolvedValue(undefined),
 		resolveStage: vi.fn().mockResolvedValue(1),
 		getUserByEmail: vi.fn().mockResolvedValue(null),
 		getPartnerIdForUser: vi.fn().mockResolvedValue(null),
@@ -229,7 +230,12 @@ describe("handlePushEvent", () => {
 			getDeliveryEffectStatus: status,
 			getTask: vi.fn(async (taskId: number) =>
 				taskId === 123
-					? { id: 123, name: "Task", stage_id: [1, "Todo"] as [number, string] }
+					? {
+							id: 123,
+							name: "Task",
+							stage_id: [1, "Todo"] as [number, string],
+							github_pr_url: null,
+						}
 					: null,
 			),
 		});
@@ -291,7 +297,83 @@ describe("handlePullRequestEvent", () => {
 		const result = await handlePullRequestEvent(event, odoo, null);
 
 		expect(result.processed).toBe(1);
+		expect(odoo.setPrimaryPullRequestUrl).toHaveBeenCalledWith(
+			123,
+			"https://github.com/owner/repo/pull/42",
+		);
 		expect(odoo.addMessage).toHaveBeenCalledWith(123, expect.stringContaining("#42"), "testuser");
+	});
+
+	it("links one PR as primary on multiple referenced tasks", async () => {
+		const odoo = createMockOdooClient();
+		const event: PullRequestEvent = {
+			...basePREvent,
+			pull_request: { ...basePREvent.pull_request, title: "Refs ODP-123 and ODP-456" },
+		};
+
+		const result = await handlePullRequestEvent(event, odoo, null);
+
+		expect(result.processed).toBe(2);
+		expect(odoo.setPrimaryPullRequestUrl).toHaveBeenCalledWith(123, event.pull_request.html_url);
+		expect(odoo.setPrimaryPullRequestUrl).toHaveBeenCalledWith(456, event.pull_request.html_url);
+	});
+
+	it("does not replace a different primary PR, but still posts the new reference", async () => {
+		const odoo = createMockOdooClient({
+			getTask: vi.fn().mockResolvedValue({
+				id: 123,
+				name: "Test Task",
+				stage_id: [1, "Todo"],
+				github_pr_url: "https://github.com/owner/repo/pull/41",
+			}),
+		});
+		const event: PullRequestEvent = {
+			...basePREvent,
+			pull_request: { ...basePREvent.pull_request, title: "Refs ODP-123" },
+		};
+
+		const result = await handlePullRequestEvent(event, odoo, null);
+
+		expect(result.processed).toBe(1);
+		expect(odoo.setPrimaryPullRequestUrl).not.toHaveBeenCalled();
+		expect(odoo.addMessage).toHaveBeenCalledWith(123, expect.stringContaining("#42"), "testuser");
+	});
+
+	it("does not rewrite the existing primary PR on subsequent events", async () => {
+		const odoo = createMockOdooClient({
+			getTask: vi.fn().mockResolvedValue({
+				id: 123,
+				name: "Test Task",
+				stage_id: [1, "Todo"],
+				github_pr_url: basePREvent.pull_request.html_url,
+			}),
+		});
+		const event: PullRequestEvent = {
+			...basePREvent,
+			action: "edited",
+			pull_request: { ...basePREvent.pull_request, title: "Refs ODP-123" },
+		};
+
+		const result = await handlePullRequestEvent(event, odoo, null);
+
+		expect(result.processed).toBe(1);
+		expect(odoo.setPrimaryPullRequestUrl).not.toHaveBeenCalled();
+	});
+
+	it("does not mark delivery complete when the primary link write fails", async () => {
+		const odoo = createMockOdooClient({
+			setPrimaryPullRequestUrl: vi.fn().mockRejectedValue(new Error("Odoo write failed")),
+		});
+		const event: PullRequestEvent = {
+			...basePREvent,
+			pull_request: { ...basePREvent.pull_request, title: "Refs ODP-123" },
+		};
+
+		const result = await handlePullRequestEvent(event, odoo, null, { deliveryId: "delivery-42" });
+
+		expect(result.errors).toContain("ODP-123: Odoo write failed");
+		expect(odoo.setStage).not.toHaveBeenCalled();
+		expect(odoo.addMessage).not.toHaveBeenCalled();
 	});
 
 	it("processes PR with ODP reference in body", async () => {
@@ -361,7 +443,7 @@ describe("handlePullRequestEvent", () => {
 		expect(odoo.setStage).toHaveBeenCalledWith(123, 6); // canceled stage
 	});
 
-	it("does not set inProgress stage when draft PR is opened", async () => {
+	it("sets inProgress stage when a draft PR is opened", async () => {
 		const odoo = createMockOdooClient();
 		const event: PullRequestEvent = {
 			...basePREvent,
@@ -376,7 +458,7 @@ describe("handlePullRequestEvent", () => {
 		await handlePullRequestEvent(event, odoo, null);
 
 		expect(odoo.addMessage).toHaveBeenCalled();
-		expect(odoo.setStage).not.toHaveBeenCalled();
+		expect(odoo.setStage).toHaveBeenCalledWith(123, 2);
 	});
 
 	it("sets inProgress stage when draft PR is marked ready for review", async () => {

@@ -71,6 +71,8 @@ Minimum required groups for Ghoodoo are **API Base** and **API Project** (task +
 
 Also add the bot user as a follower on any projects whose tasks should be updated.
 
+Install the `makespan_github` addon from the Makespan Odoo repository **before upgrading Ghoodoo**. The Worker reads and writes `project.task.github_pr_url`; without the Odoo field, PR deliveries will retry and eventually dead-letter. Verify that the bot can read and write the field before enabling the new Worker.
+
 ### 3. Create queues and deploy
 
 Queue creation is required once per Cloudflare account:
@@ -122,6 +124,7 @@ When a commit or PR references an Odoo task, a message is posted to the task's c
 
 - Messages include a clickable GitHub icon and links to the commit/PR
 - Messages are posted as the API/bot user (see note below)
+- The first PR referencing a task becomes its **primary PR link** on the task form. One PR can populate multiple tasks; a second PR never silently replaces a populated primary link. Other PR links remain in chatter. To change the primary link, an authorized operator must clear or edit the field through the Odoo API before a later PR event.
 
 ### Stage Transitions
 
@@ -129,7 +132,7 @@ Tasks are moved to different stages based on PR actions (if configured):
 
 | PR Action | Stage Used | Condition |
 |-----------|------------|-----------|
-| Opened/Reopened | `ODOO_STAGE_IN_PROGRESS` | Non-draft PR and stage configured |
+| Opened/Reopened | `ODOO_STAGE_IN_PROGRESS` | PR references task and stage configured (including drafts) |
 | Ready for review | `ODOO_STAGE_IN_PROGRESS` | Draft PR becomes ready and stage configured |
 | Merged | `ODOO_STAGE_DONE` | If `Closes`/`Fixes`/`Resolves` keyword used |
 | Closed (not merged) | `ODOO_STAGE_CANCELED` | If configured |

@@ -261,8 +261,7 @@ export async function handlePullRequestEvent(
 	const isMerged = event.action === "closed" && pr.merged;
 	const isClosed = event.action === "closed" && !pr.merged;
 	const isOpened =
-		((event.action === "opened" || event.action === "reopened") && !pr.draft) ||
-		event.action === "ready_for_review";
+		event.action === "opened" || event.action === "reopened" || event.action === "ready_for_review";
 	const stageOrder = pullRequestStageOrder(event, isOpened, isClosed, isMerged);
 	const updatedTasks: string[] = [];
 
@@ -292,6 +291,12 @@ export async function handlePullRequestEvent(
 			if (!task) {
 				result.errors.push(`ODP-${ref.taskId}: Task not found`);
 				continue;
+			}
+
+			// The field is a primary link, not a complete PR history. Never replace
+			// an existing link with a different PR; chatter records every reference.
+			if (!task.github_pr_url) {
+				await odoo.setPrimaryPullRequestUrl(ref.taskId, pr.html_url);
 			}
 
 			const targetStage = getTargetStage(ref.action);

@@ -4,6 +4,7 @@ export type OdooTask = OdooRecord & {
 	id: number;
 	name: string;
 	stage_id: [number, string] | null;
+	github_pr_url: string | null;
 };
 
 export type OdooStage = OdooRecord & {

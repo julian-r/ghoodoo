@@ -40,13 +40,15 @@ describe("OdooClient", () => {
 
 	describe("getTask", () => {
 		it("returns task when found", async () => {
-			const task = { id: 123, name: "Test Task", stage_id: [1, "Todo"] };
+			const task = { id: 123, name: "Test Task", stage_id: [1, "Todo"], github_pr_url: null };
 			fetchSpy = mockFetch([authResponse, { result: [task] }]);
 
 			const client = new OdooClient(baseConfig);
 			const result = await client.getTask(123);
 
 			expect(result).toEqual(task);
+			const callBody = JSON.parse((fetchSpy.mock.calls[1][1] as RequestInit).body as string);
+			expect(callBody.params.args[6].fields).toContain("github_pr_url");
 		});
 
 		it("returns null when task not found", async () => {
@@ -64,6 +66,30 @@ describe("OdooClient", () => {
 			const client = new OdooClient(baseConfig);
 
 			await expect(client.getTask(123)).rejects.toThrow("Access denied");
+		});
+	});
+
+	describe("setPrimaryPullRequestUrl", () => {
+		it("writes the primary PR field", async () => {
+			fetchSpy = mockFetch([authResponse, { result: true }]);
+			const client = new OdooClient(baseConfig);
+
+			await client.setPrimaryPullRequestUrl(123, "https://github.com/owner/repo/pull/42");
+
+			const callBody = JSON.parse((fetchSpy.mock.calls[1][1] as RequestInit).body as string);
+			expect(callBody.params.args[4]).toBe("write");
+			expect(callBody.params.args[5][1]).toEqual({
+				github_pr_url: "https://github.com/owner/repo/pull/42",
+			});
+		});
+
+		it("throws on an unsuccessful write so the webhook can retry", async () => {
+			fetchSpy = mockFetch([authResponse, { result: false }]);
+			const client = new OdooClient(baseConfig);
+
+			await expect(
+				client.setPrimaryPullRequestUrl(123, "https://github.com/owner/repo/pull/42"),
+			).rejects.toThrow("Primary PR link update returned false for task 123");
 		});
 	});
 

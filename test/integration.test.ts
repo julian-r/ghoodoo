@@ -405,7 +405,8 @@ describe("Worker integration", () => {
 				42,
 				[], // exact delivery marker
 				[], // latest delivery marker
-				[{ id: 123, name: "Test Task", stage_id: [1, "Todo"] }],
+				[{ id: 123, name: "Test Task", stage_id: [1, "Todo"], github_pr_url: null }],
+				true, // set primary PR link
 				true, // set stage
 				[], // author lookup
 				[{ id: 1, name: "Note" }],
@@ -429,7 +430,7 @@ describe("Worker integration", () => {
 			await worker.queue(batch, testEnv);
 
 			expect(ack).toHaveBeenCalledOnce();
-			expect(fetchSpy).toHaveBeenCalledTimes(8);
+			expect(fetchSpy).toHaveBeenCalledTimes(9);
 		});
 
 		it("resolves configured stage names in the consumer", async () => {
@@ -437,7 +438,8 @@ describe("Worker integration", () => {
 				42,
 				[], // exact delivery marker
 				[], // latest delivery marker
-				[{ id: 123, name: "Test Task", stage_id: [1, "Todo"] }],
+				[{ id: 123, name: "Test Task", stage_id: [1, "Todo"], github_pr_url: null }],
+				true, // set primary PR link
 				[{ id: 5, name: "Review" }],
 				true,
 				[], // author lookup

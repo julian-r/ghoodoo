@@ -141,7 +141,7 @@ export class OdooClient {
 	async getTask(id: number): Promise<OdooTask | null> {
 		const result = await this.client.searchRead("project.task", {
 			domain: [["id", "=", id]],
-			fields: ["id", "name", "stage_id"],
+			fields: ["id", "name", "stage_id", "github_pr_url"],
 			limit: 1,
 		});
 		return result.length > 0 ? (result[0] as OdooTask) : null;
@@ -312,6 +312,11 @@ export class OdooClient {
 		});
 		const stage = result[0] as OdooStage | undefined;
 		return stage?.id ?? null;
+	}
+
+	async setPrimaryPullRequestUrl(taskId: number, url: string): Promise<void> {
+		const updated = await this.client.tasks.set(taskId, { github_pr_url: url });
+		if (!updated) throw new Error(`Primary PR link update returned false for task ${taskId}`);
 	}
 
 	async setStage(taskId: number, stageRef?: StageRef): Promise<boolean> {
