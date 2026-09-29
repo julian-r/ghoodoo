@@ -47,21 +47,15 @@ export type GitHubEventMessage =
 			event: PullRequestEvent;
 	  };
 
-function reportProcessingErrors(eventType: string, deliveryId: string, errors: string[]): void {
-	if (errors.length === 0) return;
-
-	Sentry.captureMessage(`${eventType} processing completed with ${errors.length} error(s)`, {
-		level: "warning",
-		tags: {
-			github_event_type: eventType,
-			github_delivery_id: deliveryId,
-		},
-		extra: {
-			deliveryId,
-			errors,
-			errorCount: errors.length,
-		},
-	});
+export class EventProcessingError extends Error {
+	constructor(
+		readonly eventType: GitHubEventMessage["eventType"],
+		readonly deliveryId: string,
+		readonly processingErrors: string[],
+	) {
+		super(`GitHub ${eventType} event processing failed`);
+		this.name = "EventProcessingError";
+	}
 }
 
 function parseStageRef(value: string): number | string {
@@ -156,9 +150,8 @@ async function processQueuedEvent(
 					deliveryContext,
 				);
 
-	reportProcessingErrors(eventType, deliveryId, result.errors);
 	if (result.errors.length > 0) {
-		throw new Error(`Event processing failed: ${result.errors.join("; ")}`);
+		throw new EventProcessingError(eventType, deliveryId, result.errors);
 	}
 	return result;
 }
@@ -271,6 +264,8 @@ export const handler = {
 				);
 			} catch (error) {
 				message.retry();
+				const processingErrors =
+					error instanceof EventProcessingError ? error.processingErrors : undefined;
 				console.error(
 					JSON.stringify({
 						message: "Queued GitHub event failed",
@@ -278,6 +273,7 @@ export const handler = {
 						deliveryId: message.body.deliveryId,
 						attempts: message.attempts,
 						error: error instanceof Error ? error.message : String(error),
+						...(processingErrors ? { processingErrors } : {}),
 					}),
 				);
 				Sentry.captureException(error, {
@@ -285,7 +281,14 @@ export const handler = {
 						github_event_type: message.body.eventType,
 						github_delivery_id: message.body.deliveryId,
 					},
-					extra: { queueMessageId: message.id, attempts: message.attempts },
+					...(processingErrors
+						? { fingerprint: ["ghoodoo-queue-processing", message.body.eventType] }
+						: {}),
+					extra: {
+						queueMessageId: message.id,
+						attempts: message.attempts,
+						...(processingErrors ? { processingErrors } : {}),
+					},
 				});
 			}
 		}
