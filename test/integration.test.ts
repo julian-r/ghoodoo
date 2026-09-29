@@ -1,5 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type Env, type GitHubEventMessage, handleQueue, handleWebhook } from "../src/index.js";
+import {
+	type Env,
+	EventProcessingError,
+	type GitHubEventMessage,
+	handleQueue,
+	handleWebhook,
+} from "../src/index.js";
+
+const sentryMocks = vi.hoisted(() => ({
+	captureException: vi.fn((_error: unknown, _context?: unknown) => "event-id"),
+	captureMessage: vi.fn((_message: string, _context?: unknown) => "event-id"),
+}));
+
+vi.mock("@sentry/cloudflare", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@sentry/cloudflare")>()),
+	captureException: sentryMocks.captureException,
+	captureMessage: sentryMocks.captureMessage,
+}));
 
 const worker = { fetch: handleWebhook, queue: handleQueue };
 
@@ -122,6 +139,8 @@ describe("Worker integration", () => {
 	beforeEach(() => {
 		queueSend.mockReset();
 		queueSend.mockResolvedValue(undefined);
+		sentryMocks.captureException.mockClear();
+		sentryMocks.captureMessage.mockClear();
 	});
 
 	afterEach(() => {
@@ -386,7 +405,7 @@ describe("Worker integration", () => {
 			expect(retry).not.toHaveBeenCalled();
 		});
 
-		it("retries a message when event processing reports an error", async () => {
+		it("reports one stably grouped exception when event processing fails", async () => {
 			mockOdooResponses([42, []]);
 			const { batch, ack, retry } = queueBatch({
 				eventType: "push",
@@ -398,6 +417,23 @@ describe("Worker integration", () => {
 
 			expect(retry).toHaveBeenCalledOnce();
 			expect(ack).not.toHaveBeenCalled();
+			expect(sentryMocks.captureMessage).not.toHaveBeenCalled();
+			expect(sentryMocks.captureException).toHaveBeenCalledOnce();
+			const [reportedError, context] = sentryMocks.captureException.mock.calls[0];
+			expect(reportedError).toBeInstanceOf(EventProcessingError);
+			expect(reportedError).toMatchObject({
+				name: "EventProcessingError",
+				message: "GitHub push event processing failed",
+				processingErrors: ["ODP-123: Task not found"],
+			});
+			expect(context).toEqual(
+				expect.objectContaining({
+					fingerprint: ["ghoodoo-queue-processing", "push"],
+					extra: expect.objectContaining({
+						processingErrors: ["ODP-123: Task not found"],
+					}),
+				}),
+			);
 		});
 
 		it("processes merged PR transitions before acknowledging", async () => {
