@@ -141,7 +141,7 @@ export class OdooClient {
 	async getTask(id: number): Promise<OdooTask | null> {
 		const result = await this.client.searchRead("project.task", {
 			domain: [["id", "=", id]],
-			fields: ["id", "name", "stage_id", "github_pr_url"],
+			fields: ["id", "name", "stage_id", "github_pr_url", "state"],
 			limit: 1,
 		});
 		return result.length > 0 ? (result[0] as OdooTask) : null;
