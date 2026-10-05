@@ -132,8 +132,8 @@ Tasks are moved to different stages based on PR actions (if configured):
 
 | PR Action | Stage Used | Condition |
 |-----------|------------|-----------|
-| Opened/Reopened | `ODOO_STAGE_IN_PROGRESS` | PR references task and stage configured (including drafts) |
-| Ready for review | `ODOO_STAGE_IN_PROGRESS` | Draft PR becomes ready and stage configured |
+| Opened/Reopened | `ODOO_STAGE_IN_PROGRESS` | Primary PR (or no primary link), task not completed, stage configured (including drafts) |
+| Ready for review | `ODOO_STAGE_IN_PROGRESS` | Primary PR (or no primary link), task not completed, stage configured |
 | Merged | `ODOO_STAGE_DONE` | If `Closes`/`Fixes`/`Resolves` keyword used |
 | Closed (not merged) | `ODOO_STAGE_CANCELED` | If configured |
 

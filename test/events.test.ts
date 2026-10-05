@@ -339,6 +339,55 @@ describe("handlePullRequestEvent", () => {
 		expect(odoo.addMessage).toHaveBeenCalledWith(123, expect.stringContaining("#42"), "testuser");
 	});
 
+	it.each(["opened", "reopened", "ready_for_review"])(
+		"does not restart a task from a secondary PR on %s",
+		async (action) => {
+			const odoo = createMockOdooClient({
+				getTask: vi.fn().mockResolvedValue({
+					id: 123,
+					stage_id: [1, "Todo"],
+					github_pr_url: "https://github.com/owner/repo/pull/41",
+				}),
+			});
+			const result = await handlePullRequestEvent(
+				{
+					...basePREvent,
+					action,
+					pull_request: { ...basePREvent.pull_request, title: "Refs ODP-123" },
+				},
+				odoo,
+				null,
+			);
+			expect(result.errors).toEqual([]);
+			expect(result.processed).toBe(1);
+			expect(odoo.setStage).not.toHaveBeenCalled();
+			expect(odoo.addMessage).toHaveBeenCalledOnce();
+		},
+	);
+
+	it.each([
+		{ state: "1_done", stage_id: [2, "In Progress"], done: 5 },
+		{ state: "01_in_progress", stage_id: [5, "Done"], done: 5 },
+		{ state: "01_in_progress", stage_id: [5, "Done"], done: "Done" },
+	])("does not restart a completed task without a primary link: %j", async (task) => {
+		const odoo = createMockOdooClient({
+			getTask: vi.fn().mockResolvedValue({ id: 123, ...task, github_pr_url: null }),
+			stages: { done: task.done, inProgress: 2 },
+		});
+		const result = await handlePullRequestEvent(
+			{
+				...basePREvent,
+				pull_request: { ...basePREvent.pull_request, title: "Refs ODP-123" },
+			},
+			odoo,
+			null,
+		);
+		expect(result.errors).toEqual([]);
+		expect(odoo.setStage).not.toHaveBeenCalled();
+		expect(odoo.setPrimaryPullRequestUrl).toHaveBeenCalledOnce();
+		expect(odoo.addMessage).toHaveBeenCalledOnce();
+	});
+
 	it("does not rewrite the existing primary PR on subsequent events", async () => {
 		const odoo = createMockOdooClient({
 			getTask: vi.fn().mockResolvedValue({

@@ -299,7 +299,17 @@ export async function handlePullRequestEvent(
 				await odoo.setPrimaryPullRequestUrl(ref.taskId, pr.html_url);
 			}
 
-			const targetStage = getTargetStage(ref.action);
+			const doneStage = odoo.stages.done;
+			const isCompleted =
+				task.state === "1_done" ||
+				(typeof doneStage === "number"
+					? task.stage_id?.[0] === doneStage
+					: task.stage_id?.[1] === doneStage);
+			const isSecondaryPr = Boolean(task.github_pr_url && task.github_pr_url !== pr.html_url);
+			// A new reference is not a request to reopen completed work. Secondary
+			// PRs still get chatter entries, but cannot restart the primary task.
+			const targetStage =
+				isOpened && (isCompleted || isSecondaryPr) ? null : getTargetStage(ref.action);
 			if (targetStage) {
 				console.info(
 					`PR #${pr.number} transitioning ODP-${ref.taskId} via action=${ref.action} to stage=${String(targetStage)}`,
