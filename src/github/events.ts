@@ -267,7 +267,8 @@ export async function handlePullRequestEvent(
 
 	// Determine which stage to transition to based on PR action
 	const getTargetStage = (refAction: "close" | "ref"): StageRef | null => {
-		if (isMerged && refAction === "close") {
+		if (refAction !== "close") return null;
+		if (isMerged) {
 			return odoo.stages.done;
 		}
 		if (isClosed && odoo.stages.canceled) {
@@ -281,7 +282,12 @@ export async function handlePullRequestEvent(
 
 	for (const ref of refs) {
 		try {
-			const effect = deliveryEffect(context, "pull_request", ref.taskId, stageOrder);
+			const effect = deliveryEffect(
+				context,
+				"pull_request",
+				ref.taskId,
+				ref.action === "close" ? stageOrder : undefined,
+			);
 			if (effect) {
 				const status = await odoo.getDeliveryEffectStatus(ref.taskId, effect);
 				if (status !== "pending") continue;
@@ -293,9 +299,9 @@ export async function handlePullRequestEvent(
 				continue;
 			}
 
-			// The field is a primary link, not a complete PR history. Never replace
-			// an existing link with a different PR; chatter records every reference.
-			if (!task.github_pr_url) {
+			// Only explicit closing references establish ownership. Incidental
+			// references belong in chatter and never claim the primary PR link.
+			if (ref.action === "close" && !task.github_pr_url) {
 				await odoo.setPrimaryPullRequestUrl(ref.taskId, pr.html_url);
 			}
 

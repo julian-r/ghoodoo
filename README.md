@@ -124,18 +124,18 @@ When a commit or PR references an Odoo task, a message is posted to the task's c
 
 - Messages include a clickable GitHub icon and links to the commit/PR
 - Messages are posted as the API/bot user (see note below)
-- The first PR referencing a task becomes its **primary PR link** on the task form. One PR can populate multiple tasks; a second PR never silently replaces a populated primary link. Other PR links remain in chatter. To change the primary link, an authorized operator must clear or edit the field through the Odoo API before a later PR event.
+- The first PR explicitly closing a task (`Closes`/`Fixes`/`Resolves`) becomes its **primary PR link** on the task form. One PR can populate multiple tasks; a second PR never silently replaces a populated primary link. Other PR links remain in chatter. To change the primary link, an authorized operator must clear or edit the field through the Odoo API before a later PR event.
 
 ### Stage Transitions
 
-Tasks are moved to different stages based on PR actions (if configured):
+Plain mentions and `Refs ODP-XXX` are chatter-only: they never change stages or assign primary PR links. Only explicit closing references (`Closes`/`Fixes`/`Resolves`) drive the following PR stage transitions (if configured):
 
 | PR Action | Stage Used | Condition |
 |-----------|------------|-----------|
 | Opened/Reopened | `ODOO_STAGE_IN_PROGRESS` | Primary PR (or no primary link), task not completed, stage configured (including drafts) |
 | Ready for review | `ODOO_STAGE_IN_PROGRESS` | Primary PR (or no primary link), task not completed, stage configured |
 | Merged | `ODOO_STAGE_DONE` | If `Closes`/`Fixes`/`Resolves` keyword used |
-| Closed (not merged) | `ODOO_STAGE_CANCELED` | If configured |
+| Closed (not merged) | `ODOO_STAGE_CANCELED` | Closing reference and stage configured |
 
 > **Note:** Stage transitions only work for tasks that belong to a project. Personal/private tasks cannot have project stages assigned.
 
