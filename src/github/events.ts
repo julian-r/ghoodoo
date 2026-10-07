@@ -274,6 +274,9 @@ export async function handlePullRequestEvent(
 		if (isClosed && odoo.stages.canceled) {
 			return odoo.stages.canceled;
 		}
+		if (event.action === "ready_for_review") {
+			return odoo.stages.review ?? null;
+		}
 		if (isOpened && odoo.stages.inProgress) {
 			return odoo.stages.inProgress;
 		}

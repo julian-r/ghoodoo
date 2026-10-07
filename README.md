@@ -27,6 +27,7 @@ wrangler secret put ODOO_USERNAME
 wrangler secret put ODOO_API_KEY
 wrangler secret put ODOO_STAGE_DONE
 wrangler secret put ODOO_STAGE_IN_PROGRESS  # optional
+wrangler secret put ODOO_STAGE_REVIEW       # optional
 wrangler secret put ODOO_STAGE_CANCELED     # optional
 wrangler secret put ODOO_USER_MAPPING       # optional
 wrangler secret put ODOO_DEFAULT_USER_ID          # optional
@@ -44,7 +45,8 @@ wrangler secret put SENTRY_DSN                     # optional
 | `ODOO_USERNAME` | Login email for the Odoo API user (e.g., `bot@company.com`) |
 | `ODOO_API_KEY` | Odoo API key for authentication |
 | `ODOO_STAGE_DONE` | Stage for merged PRs with close keywords (ID or name, e.g., `Done` or `4`) |
-| `ODOO_STAGE_IN_PROGRESS` | Optional: Stage when PR opened (e.g., `In Progress`) |
+| `ODOO_STAGE_IN_PROGRESS` | Optional: Stage when PR opened/reopened (e.g., `In Progress`) |
+| `ODOO_STAGE_REVIEW` | Optional: Stage when draft PR becomes ready for review (ID or name, e.g., `Review`) |
 | `ODOO_STAGE_CANCELED` | Optional: Stage when PR closed without merge (e.g., `Canceled`) |
 | `ODOO_USER_MAPPING` | Optional: JSON mapping GitHub email → Odoo email (see below) |
 | `ODOO_DEFAULT_USER_ID` | Optional: Fallback Odoo user ID when no mapping found |
@@ -133,9 +135,11 @@ Plain mentions and `Refs ODP-XXX` are chatter-only: they never change stages or 
 | PR Action | Stage Used | Condition |
 |-----------|------------|-----------|
 | Opened/Reopened | `ODOO_STAGE_IN_PROGRESS` | Primary PR (or no primary link), task not completed, stage configured (including drafts) |
-| Ready for review | `ODOO_STAGE_IN_PROGRESS` | Primary PR (or no primary link), task not completed, stage configured |
+| Ready for review | `ODOO_STAGE_REVIEW` | Primary PR (or no primary link), task not completed, stage configured |
 | Merged | `ODOO_STAGE_DONE` | If `Closes`/`Fixes`/`Resolves` keyword used |
 | Closed (not merged) | `ODOO_STAGE_CANCELED` | Closing reference and stage configured |
+
+If `ODOO_STAGE_REVIEW` is unset, becoming ready for review records chatter without changing the stage; it does not fall back to In Progress. Opening a non-draft PR still uses In Progress.
 
 > **Note:** Stage transitions only work for tasks that belong to a project. Personal/private tasks cannot have project stages assigned.
 

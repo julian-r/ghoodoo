@@ -20,7 +20,7 @@ function createMockOdooClient(overrides: Partial<OdooClient> = {}): OdooClient {
 		resolveAuthorPartnerId: vi.fn().mockResolvedValue(null),
 		resolveAuthorLink: vi.fn().mockResolvedValue("@testuser"),
 		getDeliveryEffectStatus: vi.fn().mockResolvedValue("pending"),
-		stages: { done: 5, inProgress: 2, canceled: 6 },
+		stages: { done: 5, inProgress: 2, review: 7, canceled: 6 },
 		...overrides,
 	} as unknown as OdooClient;
 }
@@ -566,7 +566,7 @@ describe("handlePullRequestEvent", () => {
 		expect(odoo.setStage).toHaveBeenCalledWith(123, 2);
 	});
 
-	it("sets inProgress stage when draft PR is marked ready for review", async () => {
+	it("sets review stage when draft PR is marked ready for review", async () => {
 		const odoo = createMockOdooClient();
 		const event: PullRequestEvent = {
 			...basePREvent,
@@ -580,7 +580,79 @@ describe("handlePullRequestEvent", () => {
 
 		await handlePullRequestEvent(event, odoo, null);
 
-		expect(odoo.setStage).toHaveBeenCalledWith(123, 2);
+		expect(odoo.setStage).toHaveBeenCalledExactlyOnceWith(123, 7);
+	});
+
+	it("does not fall back to In Progress when the Review stage is unset", async () => {
+		const odoo = createMockOdooClient({ stages: { done: 5, inProgress: 2 } });
+		const result = await handlePullRequestEvent(
+			{
+				...basePREvent,
+				action: "ready_for_review",
+				pull_request: { ...basePREvent.pull_request, title: "Closes ODP-123" },
+			},
+			odoo,
+			null,
+		);
+		expect(result.errors).toEqual([]);
+		expect(result.processed).toBe(1);
+		expect(odoo.setStage).not.toHaveBeenCalled();
+		expect(odoo.addMessage).toHaveBeenCalledOnce();
+	});
+
+	it("does not move a completed task to Review", async () => {
+		const odoo = createMockOdooClient({
+			getTask: vi.fn().mockResolvedValue({
+				id: 123,
+				stage_id: [5, "Done"],
+				state: "1_done",
+				github_pr_url: basePREvent.pull_request.html_url,
+			}),
+		});
+		await handlePullRequestEvent(
+			{
+				...basePREvent,
+				action: "ready_for_review",
+				pull_request: { ...basePREvent.pull_request, title: "Closes ODP-123" },
+			},
+			odoo,
+			null,
+		);
+		expect(odoo.setStage).not.toHaveBeenCalled();
+		expect(odoo.addMessage).toHaveBeenCalledOnce();
+	});
+
+	it("uses readiness time to prevent delayed opening from reverting Review", async () => {
+		const odoo = createMockOdooClient();
+		await handlePullRequestEvent(
+			{
+				...basePREvent,
+				action: "ready_for_review",
+				pull_request: {
+					...basePREvent.pull_request,
+					title: "Closes ODP-123",
+					updated_at: "2026-01-01T10:05:00Z",
+				},
+			},
+			odoo,
+			null,
+			{ deliveryId: "ready-delivery" },
+		);
+		expect(odoo.getDeliveryEffectStatus).toHaveBeenCalledWith(123, {
+			id: "pull_request.ready-delivery.task.123",
+			stageOrder: { occurredAt: Date.parse("2026-01-01T10:05:00Z"), state: "open" },
+		});
+		vi.mocked(odoo.getDeliveryEffectStatus).mockResolvedValue("stale");
+		await handlePullRequestEvent(
+			{
+				...basePREvent,
+				pull_request: { ...basePREvent.pull_request, title: "Closes ODP-123" },
+			},
+			odoo,
+			null,
+			{ deliveryId: "delayed-open" },
+		);
+		expect(odoo.setStage).toHaveBeenCalledExactlyOnceWith(123, 7);
 	});
 
 	it("does not let an older retried event overwrite a newer task state", async () => {
