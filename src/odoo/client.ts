@@ -7,6 +7,7 @@ export type StageRef = number | string;
 export interface StageConfig {
 	done: StageRef; // Required: stage for closes/fixes when merged
 	inProgress?: StageRef; // Optional: stage when PR opened
+	review?: StageRef; // Optional: stage when draft PR becomes ready for review
 	canceled?: StageRef; // Optional: stage when PR closed without merge
 }
 

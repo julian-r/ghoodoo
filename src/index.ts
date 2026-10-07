@@ -21,6 +21,7 @@ export interface GhoodooEnv extends Cloudflare.Env {
 	ODOO_API_KEY: string;
 	ODOO_STAGE_DONE: string;
 	ODOO_STAGE_IN_PROGRESS?: string;
+	ODOO_STAGE_REVIEW?: string;
 	ODOO_STAGE_CANCELED?: string;
 	ODOO_USER_MAPPING?: string;
 	ODOO_DEFAULT_USER_ID?: string;
@@ -117,6 +118,7 @@ function createOdooClient(env: GhoodooEnv, eventType: string, deliveryId: string
 			inProgress: env.ODOO_STAGE_IN_PROGRESS
 				? parseStageRef(env.ODOO_STAGE_IN_PROGRESS)
 				: undefined,
+			review: env.ODOO_STAGE_REVIEW ? parseStageRef(env.ODOO_STAGE_REVIEW) : undefined,
 			canceled: env.ODOO_STAGE_CANCELED ? parseStageRef(env.ODOO_STAGE_CANCELED) : undefined,
 		},
 		userMapping: parseUserMapping(env.ODOO_USER_MAPPING, eventType, deliveryId),

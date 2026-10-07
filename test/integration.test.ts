@@ -469,6 +469,45 @@ describe("Worker integration", () => {
 			expect(fetchSpy).toHaveBeenCalledTimes(9);
 		});
 
+		it.each(["Review", "7"])("uses configured Review stage %s for readiness", async (review) => {
+			const fetchSpy = mockOdooResponses([
+				42,
+				[], // exact delivery marker
+				[], // latest stage marker
+				[
+					{
+						id: 123,
+						name: "Test Task",
+						stage_id: [2, "In Progress"],
+						github_pr_url: pullRequestEvent.pull_request.html_url,
+					},
+				],
+				...(review === "Review" ? [[{ id: 7, name: "Review" }]] : []),
+				true, // stage write
+				[], // author lookup
+				[{ id: 1, name: "Note" }],
+				1,
+			]);
+			const { batch, ack, retry } = queueBatch({
+				eventType: "pull_request",
+				deliveryId: "ready-delivery",
+				event: { ...pullRequestEvent, action: "ready_for_review" },
+			});
+			await worker.queue(batch, { ...testEnv, ODOO_STAGE_REVIEW: review });
+			expect(ack).toHaveBeenCalledOnce();
+			expect(retry).not.toHaveBeenCalled();
+			const requests = fetchSpy.mock.calls.map(([, init]: [unknown, RequestInit?]) =>
+				JSON.parse(String(init?.body)),
+			);
+			expect(requests).toContainEqual(
+				expect.objectContaining({
+					params: expect.objectContaining({
+						args: expect.arrayContaining(["project.task", "write", [[123], { stage_id: 7 }]]),
+					}),
+				}),
+			);
+		});
+
 		it("resolves configured stage names in the consumer", async () => {
 			mockOdooResponses([
 				42,
