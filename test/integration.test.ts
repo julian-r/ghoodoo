@@ -71,7 +71,7 @@ const pullRequestEvent = {
 	action: "opened",
 	pull_request: {
 		number: 42,
-		title: "Refs ODP-123",
+		title: "Closes ODP-123",
 		body: null,
 		html_url: "https://github.com/owner/repo/pull/42",
 		merged: false,
@@ -321,7 +321,7 @@ describe("Worker integration", () => {
 				);
 			}
 			if (queued.eventType === "pull_request") {
-				expect(queued.event.pull_request).toMatchObject({ title: "Refs ODP-123", body: null });
+				expect(queued.event.pull_request).toMatchObject({ title: "Closes ODP-123", body: null });
 				expect("irrelevant" in queued.event.pull_request).toBe(false);
 				expect("irrelevant" in queued.event.pull_request.user).toBe(false);
 				expect("irrelevant" in queued.event.repository).toBe(false);

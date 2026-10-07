@@ -284,13 +284,69 @@ describe("handlePullRequestEvent", () => {
 		},
 	};
 
+	it.each([
+		["opened", false],
+		["reopened", false],
+		["ready_for_review", false],
+		["edited", false],
+		["closed", false],
+		["closed", true],
+	] as const)("plain mentions are chatter-only on %s (merged=%s)", async (action, merged) => {
+		const odoo = createMockOdooClient();
+		const result = await handlePullRequestEvent(
+			{
+				...basePREvent,
+				action,
+				pull_request: {
+					...basePREvent.pull_request,
+					title: "Refs ODP-123",
+					body: "Follow-up ODP-827 is blocked by ODP-796",
+					merged,
+				},
+			},
+			odoo,
+			null,
+			{ deliveryId: "reference-delivery" },
+		);
+		expect(result.errors).toEqual([]);
+		expect(result.processed).toBe(3);
+		expect(odoo.setStage).not.toHaveBeenCalled();
+		expect(odoo.setPrimaryPullRequestUrl).not.toHaveBeenCalled();
+		expect(odoo.addMessage).toHaveBeenCalledTimes(3);
+		for (const [, effect] of vi.mocked(odoo.getDeliveryEffectStatus).mock.calls) {
+			expect(effect.stageOrder).toBeUndefined();
+		}
+	});
+
+	it("only transitions the closing task in a PR with incidental follow-ups", async () => {
+		const odoo = createMockOdooClient();
+		await handlePullRequestEvent(
+			{
+				...basePREvent,
+				pull_request: {
+					...basePREvent.pull_request,
+					title: "Fixes ODP-796",
+					body: "Follow-up: ODP-827",
+				},
+			},
+			odoo,
+			null,
+		);
+		expect(odoo.setStage).toHaveBeenCalledExactlyOnceWith(796, 2);
+		expect(odoo.setPrimaryPullRequestUrl).toHaveBeenCalledExactlyOnceWith(
+			796,
+			basePREvent.pull_request.html_url,
+		);
+		expect(odoo.addMessage).toHaveBeenCalledTimes(2);
+	});
+
 	it("processes PR with ODP reference in title", async () => {
 		const odoo = createMockOdooClient();
 		const event: PullRequestEvent = {
 			...basePREvent,
 			pull_request: {
 				...basePREvent.pull_request,
-				title: "Fix ODP-123",
+				title: "Fixes ODP-123",
 			},
 		};
 
@@ -308,7 +364,7 @@ describe("handlePullRequestEvent", () => {
 		const odoo = createMockOdooClient();
 		const event: PullRequestEvent = {
 			...basePREvent,
-			pull_request: { ...basePREvent.pull_request, title: "Refs ODP-123 and ODP-456" },
+			pull_request: { ...basePREvent.pull_request, title: "Closes ODP-123 and closes ODP-456" },
 		};
 
 		const result = await handlePullRequestEvent(event, odoo, null);
@@ -353,7 +409,7 @@ describe("handlePullRequestEvent", () => {
 				{
 					...basePREvent,
 					action,
-					pull_request: { ...basePREvent.pull_request, title: "Refs ODP-123" },
+					pull_request: { ...basePREvent.pull_request, title: "Closes ODP-123" },
 				},
 				odoo,
 				null,
@@ -377,7 +433,7 @@ describe("handlePullRequestEvent", () => {
 		const result = await handlePullRequestEvent(
 			{
 				...basePREvent,
-				pull_request: { ...basePREvent.pull_request, title: "Refs ODP-123" },
+				pull_request: { ...basePREvent.pull_request, title: "Closes ODP-123" },
 			},
 			odoo,
 			null,
@@ -415,7 +471,7 @@ describe("handlePullRequestEvent", () => {
 		});
 		const event: PullRequestEvent = {
 			...basePREvent,
-			pull_request: { ...basePREvent.pull_request, title: "Refs ODP-123" },
+			pull_request: { ...basePREvent.pull_request, title: "Closes ODP-123" },
 		};
 
 		const result = await handlePullRequestEvent(event, odoo, null, { deliveryId: "delivery-42" });
@@ -442,14 +498,14 @@ describe("handlePullRequestEvent", () => {
 		expect(odoo.getTask).toHaveBeenCalledWith(456);
 	});
 
-	it("sets inProgress stage when PR is opened", async () => {
+	it("sets inProgress stage when PR with closing reference is opened", async () => {
 		const odoo = createMockOdooClient();
 		const event: PullRequestEvent = {
 			...basePREvent,
 			action: "opened",
 			pull_request: {
 				...basePREvent.pull_request,
-				title: "Refs ODP-123",
+				title: "Closes ODP-123",
 			},
 		};
 
@@ -482,7 +538,7 @@ describe("handlePullRequestEvent", () => {
 			action: "closed",
 			pull_request: {
 				...basePREvent.pull_request,
-				title: "Refs ODP-123",
+				title: "Closes ODP-123",
 				merged: false,
 			},
 		};
@@ -499,7 +555,7 @@ describe("handlePullRequestEvent", () => {
 			action: "opened",
 			pull_request: {
 				...basePREvent.pull_request,
-				title: "Refs ODP-123",
+				title: "Closes ODP-123",
 				draft: true,
 			},
 		};
@@ -517,7 +573,7 @@ describe("handlePullRequestEvent", () => {
 			action: "ready_for_review",
 			pull_request: {
 				...basePREvent.pull_request,
-				title: "Refs ODP-123",
+				title: "Closes ODP-123",
 				draft: false,
 			},
 		};
@@ -555,7 +611,7 @@ describe("handlePullRequestEvent", () => {
 			action: "edited",
 			pull_request: {
 				...basePREvent.pull_request,
-				title: "Refs ODP-123",
+				title: "Closes ODP-123",
 				updated_at: "2026-01-01T10:01:00Z",
 			},
 		};
@@ -563,7 +619,7 @@ describe("handlePullRequestEvent", () => {
 			...basePREvent,
 			pull_request: {
 				...basePREvent.pull_request,
-				title: "Refs ODP-123",
+				title: "Closes ODP-123",
 			},
 		};
 
@@ -586,7 +642,7 @@ describe("handlePullRequestEvent", () => {
 			...basePREvent,
 			pull_request: {
 				...basePREvent.pull_request,
-				title: "Refs ODP-123",
+				title: "Closes ODP-123",
 			},
 		};
 
