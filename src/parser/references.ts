@@ -5,33 +5,33 @@ export interface TaskReference {
 	taskId: number;
 }
 
-const CLOSE_KEYWORDS = ["closes", "fixes", "resolves"];
-const REF_KEYWORDS = ["refs", "references"];
-
-const REFERENCE_PATTERN = new RegExp(
-	`(?:(${[...CLOSE_KEYWORDS, ...REF_KEYWORDS].join("|")})\\s+)?ODP-(\\d+)`,
-	"gi",
-);
+// Closing is an explicit whole-task directive, not a keyword in prose.
+// In particular, "Resolves ODP-872 P2 and P3" is only a reference.
+const CLOSE_DIRECTIVE = /^(?:closes|fixes|resolves)[ \t]+ODP-(\d+)\.?$/i;
+const REFERENCE_PATTERN = /ODP-(\d+)/gi;
 
 export function parseReferences(text: string): TaskReference[] {
-	const references = new Map<number, TaskReference>();
-
-	for (const match of text.matchAll(REFERENCE_PATTERN)) {
-		const keyword = match[1]?.toLowerCase();
-		const taskId = Number.parseInt(match[2], 10);
-		const action: ReferenceAction = keyword && CLOSE_KEYWORDS.includes(keyword) ? "close" : "ref";
-		const existing = references.get(taskId);
-
-		if (!existing) {
-			references.set(taskId, { action, taskId });
+	const closingIds = new Set<number>();
+	let fence: string | undefined;
+	for (const line of text.split(/\r?\n/)) {
+		const trimmed = line.trim();
+		const marker = /^(\x60{3,}|~{3,})/.exec(trimmed)?.[1];
+		if (marker) {
+			if (!fence) fence = marker;
+			else if (marker[0] === fence[0] && marker.length >= fence.length) fence = undefined;
 			continue;
 		}
-
-		// Prefer close semantics if the same task appears multiple times
-		if (existing.action === "ref" && action === "close") {
-			references.set(taskId, { action: "close", taskId });
-		}
+		if (fence) continue;
+		const directive = CLOSE_DIRECTIVE.exec(trimmed);
+		if (directive) closingIds.add(Number.parseInt(directive[1], 10));
 	}
 
+	const references = new Map<number, TaskReference>();
+	for (const match of text.matchAll(REFERENCE_PATTERN)) {
+		const taskId = Number.parseInt(match[1], 10);
+		if (!references.has(taskId)) {
+			references.set(taskId, { action: closingIds.has(taskId) ? "close" : "ref", taskId });
+		}
+	}
 	return [...references.values()];
 }
