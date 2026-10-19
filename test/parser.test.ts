@@ -33,7 +33,7 @@ describe("parseReferences", () => {
 	});
 
 	it("is case-insensitive", () => {
-		const result = parseReferences("CLOSES odp-100 and fixes ODP-200");
+		const result = parseReferences("CLOSES odp-100\nfixes ODP-200");
 		expect(result).toEqual([
 			{ action: "close", taskId: 100 },
 			{ action: "close", taskId: 200 },
@@ -41,7 +41,7 @@ describe("parseReferences", () => {
 	});
 
 	it("parses multiple references in one text", () => {
-		const result = parseReferences("Closes ODP-1, refs ODP-2, and mentions ODP-3");
+		const result = parseReferences("Closes ODP-1\nrefs ODP-2, and mentions ODP-3");
 		expect(result).toEqual([
 			{ action: "close", taskId: 1 },
 			{ action: "ref", taskId: 2 },
@@ -55,8 +55,28 @@ describe("parseReferences", () => {
 	});
 
 	it("prioritizes close action when task appears multiple times", () => {
-		const result = parseReferences("ODP-123 in title\n\nCloses ODP-123 in body");
+		const result = parseReferences("ODP-123 in title\n\nCloses ODP-123");
 		expect(result).toEqual([{ action: "close", taskId: 123 }]);
+	});
+
+	it.each([
+		"Resolves ODP-872 P2 and P3.",
+		"- Resolves ODP-872 findings P2 and P3; the rest stays open.",
+		"This resolves ODP-872 partially",
+		"Not closes ODP-872",
+		"> Closes ODP-872",
+		"`Closes ODP-872`",
+		"```text\nCloses ODP-872\n```",
+		"~~~\nFixes ODP-872\n~~~",
+		"prefixes ODP-872",
+	])("keeps partial resolutions and examples reference-only: %s", (text) => {
+		expect(parseReferences(text)).toEqual([{ action: "ref", taskId: 872 }]);
+	});
+
+	it("accepts a standalone directive with punctuation and CRLF", () => {
+		expect(parseReferences("Summary\r\n  Resolves ODP-872.\r\n")).toEqual([
+			{ action: "close", taskId: 872 },
+		]);
 	});
 
 	it("returns empty array when no references found", () => {

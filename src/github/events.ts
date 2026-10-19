@@ -196,7 +196,7 @@ export async function handlePushEvent(
 	const allReferences = collectPushReferences(event);
 
 	for (const [taskId, commitRef] of allReferences) {
-		const { ref, shortSha, commitUrl, commitTitle, authorEmail } = commitRef;
+		const { shortSha, commitUrl, commitTitle, authorEmail } = commitRef;
 		try {
 			const effect = deliveryEffect(context, "push", taskId);
 			if (effect) {
@@ -210,10 +210,8 @@ export async function handlePushEvent(
 				continue;
 			}
 
-			if (ref.action === "close") {
-				await odoo.setStage(taskId);
-			}
-
+			// Pushes (including feature branches) only record references. Task
+			// completion belongs to the explicit closing PR's merge event.
 			const message = `${GH_ICON} Referenced in commit <a href="${commitUrl}">${shortSha}</a>: ${commitTitle}`;
 			if (effect) {
 				await odoo.addMessage(taskId, message, authorEmail, effect);

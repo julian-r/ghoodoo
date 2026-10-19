@@ -97,7 +97,9 @@ Subsequent releases only require `pnpm deploy`. The deployment registers `ghoodo
 
 ## Usage
 
-Reference Odoo tasks in commit messages or PR descriptions:
+Reference Odoo tasks in commit messages or PR descriptions. **Pushes always add chatter only**, on every branch, even when a commit contains closing keywords. Only PR events change stages.
+
+For a whole-task closing instruction, put `Closes ODP-123`, `Fixes ODP-123`, or `Resolves ODP-123` on its own line in the PR title/body (optional final period). Use one directive per line. Prose such as `Resolves ODP-872 P2 and P3.`, quoted text, and fenced code examples remain reference-only.
 
 | Syntax | Effect |
 |--------|--------|
@@ -136,7 +138,7 @@ Plain mentions and `Refs ODP-XXX` are chatter-only: they never change stages or 
 |-----------|------------|-----------|
 | Opened/Reopened | `ODOO_STAGE_IN_PROGRESS` | Primary PR (or no primary link), task not completed, stage configured (including drafts) |
 | Ready for review | `ODOO_STAGE_REVIEW` | Primary PR (or no primary link), task not completed, stage configured |
-| Merged | `ODOO_STAGE_DONE` | If `Closes`/`Fixes`/`Resolves` keyword used |
+| Merged | `ODOO_STAGE_DONE` | Standalone whole-task closing directive |
 | Closed (not merged) | `ODOO_STAGE_CANCELED` | Closing reference and stage configured |
 
 If `ODOO_STAGE_REVIEW` is unset, becoming ready for review records chatter without changing the stage; it does not fall back to In Progress. Opening a non-draft PR still uses In Progress.

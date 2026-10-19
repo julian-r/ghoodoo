@@ -61,7 +61,7 @@ describe("handlePushEvent", () => {
 		);
 	});
 
-	it("sets stage to done when commit closes task", async () => {
+	it("keeps pushes chatter-only even when a commit has a closing directive", async () => {
 		const odoo = createMockOdooClient();
 		const event: PushEvent = {
 			...basePushEvent,
@@ -77,7 +77,32 @@ describe("handlePushEvent", () => {
 
 		await handlePushEvent(event, odoo);
 
-		expect(odoo.setStage).toHaveBeenCalledWith(456);
+		expect(odoo.setStage).not.toHaveBeenCalled();
+		expect(odoo.addMessage).toHaveBeenCalledOnce();
+	});
+
+	it("does not close ODP-872 from the partial-resolution commit on the ODP-873 branch", async () => {
+		const odoo = createMockOdooClient();
+		const result = await handlePushEvent(
+			{
+				...basePushEvent,
+				ref: "refs/heads/ODP-873/bus-card-connected-ports",
+				commits: [
+					{
+						id: "c2afa66802a455470d240da2c6eccd7109a565ad",
+						message:
+							"fix(studio): draw only connected ports on Transport Bus cards\n\nResolves ODP-872 P2 and P3.",
+						url: "https://github.com/makespan/makespan/commit/c2afa66802a455470d240da2c6eccd7109a565ad",
+						author: { name: "Test User", email: "test@example.com" },
+					},
+				],
+			},
+			odoo,
+		);
+		expect(result.processed).toBe(1);
+		expect(result.errors).toEqual([]);
+		expect(odoo.setStage).not.toHaveBeenCalled();
+		expect(odoo.addMessage).toHaveBeenCalledWith(872, expect.any(String), "test@example.com");
 	});
 
 	it("does not set stage for ref-only references", async () => {
@@ -169,7 +194,7 @@ describe("handlePushEvent", () => {
 
 		await handlePushEvent(event, odoo);
 
-		expect(odoo.setStage).toHaveBeenCalledWith(123);
+		expect(odoo.setStage).not.toHaveBeenCalled();
 	});
 
 	it("returns empty result for commits without references", async () => {
@@ -340,6 +365,36 @@ describe("handlePullRequestEvent", () => {
 		expect(odoo.addMessage).toHaveBeenCalledTimes(2);
 	});
 
+	it.each([
+		["opened", false],
+		["ready_for_review", false],
+		["closed", true],
+	] as const)("partial ODP-872 resolution never transitions it on %s", async (action, merged) => {
+		const odoo = createMockOdooClient();
+		const result = await handlePullRequestEvent(
+			{
+				...basePREvent,
+				action,
+				pull_request: {
+					...basePREvent.pull_request,
+					title: "ODP-873: Draw only connected ports",
+					body: "Closes ODP-873\n\n- Resolves ODP-872 findings P2 and P3; the rest of ODP-872 stays open.",
+					merged,
+				},
+			},
+			odoo,
+			null,
+		);
+		expect(result.errors).toEqual([]);
+		expect(odoo.setStage).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(odoo.setStage).mock.calls[0][0]).toBe(873);
+		expect(odoo.setPrimaryPullRequestUrl).toHaveBeenCalledExactlyOnceWith(
+			873,
+			basePREvent.pull_request.html_url,
+		);
+		expect(odoo.addMessage).toHaveBeenCalledTimes(2);
+	});
+
 	it("processes PR with ODP reference in title", async () => {
 		const odoo = createMockOdooClient();
 		const event: PullRequestEvent = {
@@ -364,7 +419,7 @@ describe("handlePullRequestEvent", () => {
 		const odoo = createMockOdooClient();
 		const event: PullRequestEvent = {
 			...basePREvent,
-			pull_request: { ...basePREvent.pull_request, title: "Closes ODP-123 and closes ODP-456" },
+			pull_request: { ...basePREvent.pull_request, title: "Closes ODP-123\nCloses ODP-456" },
 		};
 
 		const result = await handlePullRequestEvent(event, odoo, null);
@@ -488,7 +543,7 @@ describe("handlePullRequestEvent", () => {
 			pull_request: {
 				...basePREvent.pull_request,
 				title: "Some feature",
-				body: "This closes ODP-456",
+				body: "Closes ODP-456",
 			},
 		};
 
