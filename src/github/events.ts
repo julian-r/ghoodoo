@@ -129,7 +129,9 @@ export function buildCompactPullRequestEvents(event: PullRequestEvent): PullRequ
 			number: pr.number,
 			title: chunk
 				.map((ref) => `${ref.action === "close" ? "Closes" : "Refs"} ODP-${ref.taskId}`)
-				.join(" "),
+				// The consumer reparses this text: closing directives must remain
+				// standalone lines, even alongside incidental task references.
+				.join("\n"),
 			body: null,
 			html_url: pr.html_url,
 			merged: pr.merged,
