@@ -384,6 +384,80 @@ describe("Worker integration", () => {
 	});
 
 	describe("queue consumer", () => {
+		it.each([
+			["opened", false, 2],
+			["ready_for_review", false, 7],
+			["closed", true, 5],
+			["closed", false, 6],
+		] as const)(
+			"preserves closing semantics through webhook and queue on %s (merged=%s)",
+			async (action, merged, stage) => {
+				const writes: Array<[number[], Record<string, unknown>]> = [];
+				const notes: Array<Record<string, unknown>> = [];
+				vi.spyOn(global, "fetch").mockImplementation(async (_url, init) => {
+					const request = JSON.parse(String(init?.body));
+					const args = request.params.args;
+					let result: unknown;
+					if (request.params.service === "common") result = 42;
+					else if (args[3] === "project.task" && args[4] === "search_read") {
+						const id = args[5][0][0][2];
+						result = [{ id, name: `Task ${id}`, stage_id: [1, "Todo"], github_pr_url: null }];
+					} else if (args[3] === "project.task" && args[4] === "write") {
+						writes.push(args[5]);
+						result = true;
+					} else if (args[3] === "mail.message" && args[4] === "create") {
+						notes.push(args[5][0]);
+						result = notes.length;
+					} else if (args[3] === "mail.message.subtype") result = [{ id: 1, name: "Note" }];
+					else if (["mail.message", "res.users"].includes(args[3])) result = [];
+					else throw new Error(`Unexpected RPC: ${JSON.stringify(request)}`);
+					return Response.json({ jsonrpc: "2.0", id: request.id, result });
+				});
+				const env: Env = {
+					...testEnv,
+					ODOO_STAGE_IN_PROGRESS: "2",
+					ODOO_STAGE_REVIEW: "7",
+					ODOO_STAGE_CANCELED: "6",
+				};
+				const response = await worker.fetch(
+					await webhookRequest(
+						"pull_request",
+						JSON.stringify({
+							...pullRequestEvent,
+							action,
+							pull_request: {
+								...pullRequestEvent.pull_request,
+								title: "ODP-123: Implement the feature",
+								body: "Closes ODP-123\nCloses ODP-456\n\nResolves ODP-872 P2 and P3.",
+								merged,
+							},
+						}),
+					),
+					env,
+				);
+				expect(response.status).toBe(202);
+				expect(queueSend).toHaveBeenCalledOnce();
+				const queued = queueSend.mock.calls[0][0] as GitHubEventMessage;
+				expect(queued.event).toMatchObject({
+					pull_request: { title: "Closes ODP-123\nCloses ODP-456\nRefs ODP-872" },
+				});
+				const { batch, ack, retry } = queueBatch(queued);
+				await worker.queue(batch, env);
+				expect(ack).toHaveBeenCalledOnce();
+				expect(retry).not.toHaveBeenCalled();
+				expect(writes).toEqual([
+					[[123], { github_pr_url: pullRequestEvent.pull_request.html_url }],
+					[[123], { stage_id: stage }],
+					[[456], { github_pr_url: pullRequestEvent.pull_request.html_url }],
+					[[456], { stage_id: stage }],
+				]);
+				expect(notes).toHaveLength(3);
+				for (const note of notes) {
+					expect(String(note.message_id)).toContain(note.res_id === 872 ? ".effect@" : ".stage-");
+				}
+			},
+		);
+
 		it("processes and acknowledges a push event", async () => {
 			mockOdooResponses([
 				42,
