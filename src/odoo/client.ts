@@ -315,6 +315,93 @@ export class OdooClient {
 		return stage?.id ?? null;
 	}
 
+	/**
+	 * The task of the newest note with this delivery effect ID (`exact`) or an ID that starts with it
+	 * (`prefix`), on any task. Effect markers live in the message ID, which users cannot edit.
+	 */
+	async findTaskByEffect(effectId: string, match: "exact" | "prefix"): Promise<number | null> {
+		const marker = this.deliveryEffectId({ id: effectId });
+		const result = await this.client.searchRead("mail.message", {
+			domain: [
+				["model", "=", "project.task"],
+				["message_id", "=like", `<ghoodoo.${marker}${match === "exact" ? "." : ""}%@github>`],
+			],
+			fields: ["res_id"],
+			order: "id desc",
+			limit: 1,
+		});
+		const taskId = result[0]?.res_id;
+		return typeof taskId === "number" ? taskId : null;
+	}
+
+	private isClosedStage(stage: [number, string] | null): boolean {
+		if (!stage) return false;
+		return [this.config.stages.done, this.config.stages.canceled].some((ref) =>
+			typeof ref === "number" ? ref === stage[0] : ref === stage[1],
+		);
+	}
+
+	/**
+	 * The newest open task of the project that has a note whose delivery effect ID starts with
+	 * `notePrefix` or whose description contains `descriptionKey`. Open means neither in a done or
+	 * canceled state nor in the configured Done or Canceled stage (compared with the task's own
+	 * stage, by ID or name). Every such task counts, so a reopened older task is found too.
+	 */
+	async findOpenTask(
+		projectId: number,
+		notePrefix: string,
+		descriptionKey: string,
+	): Promise<number | null> {
+		const notes = await this.client.searchRead("mail.message", {
+			domain: [
+				["model", "=", "project.task"],
+				["message_id", "=like", `<ghoodoo.${this.deliveryEffectId({ id: notePrefix })}%@github>`],
+			],
+			fields: ["res_id"],
+		});
+		const noted = [
+			...new Set(notes.map((note) => note.res_id).filter((id) => typeof id === "number")),
+		];
+		const tasks = (await this.client.searchRead("project.task", {
+			domain: [
+				["project_id", "=", projectId],
+				["state", "not in", ["1_done", "1_canceled"]],
+				"|",
+				["id", "in", noted],
+				["description", "ilike", descriptionKey],
+			],
+			fields: ["id", "stage_id"],
+			order: "id desc",
+		})) as OdooTask[];
+		return tasks.find((task) => !this.isClosedStage(task.stage_id))?.id ?? null;
+	}
+
+	/**
+	 * The newest task whose description contains the text, in any project and also when archived:
+	 * a task this module created keeps its keys there wherever it went.
+	 */
+	async findTaskByDescription(text: string): Promise<number | null> {
+		const result = await this.client.searchRead("project.task", {
+			domain: [
+				["description", "ilike", text],
+				["active", "in", [true, false]],
+			],
+			fields: ["id"],
+			order: "id desc",
+			limit: 1,
+		});
+		const id = result[0]?.id;
+		return typeof id === "number" ? id : null;
+	}
+
+	async createTask(values: {
+		project_id: number;
+		name: string;
+		description: string;
+	}): Promise<number> {
+		return this.client.create("project.task", values);
+	}
+
 	async setPrimaryPullRequestUrl(taskId: number, url: string): Promise<void> {
 		const updated = await this.client.tasks.set(taskId, { github_pr_url: url });
 		if (!updated) throw new Error(`Primary PR link update returned false for task ${taskId}`);

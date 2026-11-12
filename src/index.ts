@@ -9,6 +9,14 @@ import {
 	type PushEvent,
 } from "./github/events.js";
 import { verifyWebhookSignature } from "./github/webhook.js";
+import {
+	compactWorkflowRunEvent,
+	handleWorkflowRunEvent,
+	isTrackedWorkflowFailure,
+	isWorkflowRunEvent,
+	parseWorkflowFailureConfig,
+	type WorkflowRunEvent,
+} from "./github/workflow-runs.js";
 import { OdooClient } from "./odoo/client.js";
 
 export interface GhoodooEnv extends Cloudflare.Env {
@@ -27,6 +35,10 @@ export interface GhoodooEnv extends Cloudflare.Env {
 	ODOO_DEFAULT_USER_ID?: string;
 	ODOO_CF_ACCESS_CLIENT_ID?: string;
 	ODOO_CF_ACCESS_CLIENT_SECRET?: string;
+	/** Odoo project for tasks about failed scheduled workflow runs; with WORKFLOW_FAILURE_WORKFLOWS. */
+	WORKFLOW_FAILURE_PROJECT_ID?: string;
+	/** Comma-separated `owner/repo:Workflow name` entries whose failed scheduled runs become tasks. */
+	WORKFLOW_FAILURE_WORKFLOWS?: string;
 	SENTRY_DSN?: string;
 	SENTRY_ENVIRONMENT?: string;
 	SENTRY_RELEASE?: string;
@@ -46,6 +58,11 @@ export type GitHubEventMessage =
 			eventType: "pull_request";
 			deliveryId: string;
 			event: PullRequestEvent;
+	  }
+	| {
+			eventType: "workflow_run";
+			deliveryId: string;
+			event: WorkflowRunEvent;
 	  };
 
 export class EventProcessingError extends Error {
@@ -142,15 +159,26 @@ async function processQueuedEvent(
 
 	const odoo = createOdooClient(env, eventType, deliveryId);
 	const deliveryContext = { deliveryId };
-	const result =
-		eventType === "push"
-			? await handlePushEvent(message.event, odoo, deliveryContext)
-			: await handlePullRequestEvent(
-					message.event,
-					odoo,
-					env.GITHUB_TOKEN ? { token: env.GITHUB_TOKEN } : null,
-					deliveryContext,
-				);
+	let result: ProcessResult;
+	if (message.eventType === "push") {
+		result = await handlePushEvent(message.event, odoo, deliveryContext);
+	} else if (message.eventType === "pull_request") {
+		result = await handlePullRequestEvent(
+			message.event,
+			odoo,
+			env.GITHUB_TOKEN ? { token: env.GITHUB_TOKEN } : null,
+			deliveryContext,
+		);
+	} else {
+		const config = parseWorkflowFailureConfig(
+			env.WORKFLOW_FAILURE_PROJECT_ID,
+			env.WORKFLOW_FAILURE_WORKFLOWS,
+		);
+		// Queued while the feature was configured; without its settings there is nothing to do.
+		result = config
+			? await handleWorkflowRunEvent(message.event, odoo, config, deliveryContext)
+			: { processed: 0, errors: [] };
+	}
 
 	if (result.errors.length > 0) {
 		throw new EventProcessingError(eventType, deliveryId, result.errors);
@@ -190,13 +218,13 @@ export const handler = {
 			return Response.json({ status: "ok", event: "ping" });
 		}
 
-		if (eventType !== "push" && eventType !== "pull_request") {
+		if (eventType !== "push" && eventType !== "pull_request" && eventType !== "workflow_run") {
 			return Response.json({ status: "ok", event: eventType, message: "Event type not handled" });
 		}
 
-		let event: PushEvent | PullRequestEvent;
+		let event: PushEvent | PullRequestEvent | WorkflowRunEvent;
 		try {
-			event = JSON.parse(payload) as PushEvent | PullRequestEvent;
+			event = JSON.parse(payload) as PushEvent | PullRequestEvent | WorkflowRunEvent;
 		} catch (error) {
 			Sentry.captureException(error, {
 				tags: {
@@ -206,6 +234,47 @@ export const handler = {
 				extra: { payloadSize: payload.length },
 			});
 			return Response.json({ status: "error", message: "Invalid JSON payload" }, { status: 400 });
+		}
+
+		if (eventType === "workflow_run") {
+			// Every workflow run of the repository arrives here; queue only tracked failures.
+			const config = parseWorkflowFailureConfig(
+				env.WORKFLOW_FAILURE_PROJECT_ID,
+				env.WORKFLOW_FAILURE_WORKFLOWS,
+			);
+			if (!isWorkflowRunEvent(event)) {
+				return Response.json(
+					{ status: "error", message: "Invalid workflow_run payload" },
+					{ status: 400 },
+				);
+			}
+			const run = event;
+			if (!config || !isTrackedWorkflowFailure(run, config)) {
+				return Response.json({
+					status: "ok",
+					event: eventType,
+					message: "Workflow run not tracked",
+				});
+			}
+			try {
+				await env.GITHUB_EVENTS_QUEUE.send({
+					eventType,
+					deliveryId,
+					event: compactWorkflowRunEvent(run),
+				});
+				return Response.json(
+					{ status: "queued", event: eventType, deliveryId, messages: 1 },
+					{ status: 202 },
+				);
+			} catch (error) {
+				Sentry.captureException(error, {
+					tags: { github_event_type: eventType, github_delivery_id: deliveryId },
+				});
+				return Response.json(
+					{ status: "error", message: "Failed to enqueue event" },
+					{ status: 503 },
+				);
+			}
 		}
 
 		try {

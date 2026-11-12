@@ -69,6 +69,113 @@ describe("OdooClient", () => {
 		});
 	});
 
+	describe("findOpenTask", () => {
+		const task = (id: number, stage: [number, string] | null) => ({ id, stage_id: stage });
+
+		async function find(config: OdooConfig, tasks: unknown[]) {
+			fetchSpy = mockFetch([
+				authResponse,
+				{
+					result: [
+						{ id: 1, res_id: 7 },
+						{ id: 2, res_id: 7 },
+						{ id: 3, res_id: 8 },
+					],
+				},
+				{ result: tasks },
+			]);
+			return new OdooClient(config).findOpenTask(
+				2,
+				"workflow-failure-ab-run-",
+				"[workflow-failure-ab]",
+			);
+		}
+
+		it("searches every noted or keyed task of the project that is not done or canceled", async () => {
+			await find(baseConfig, []);
+			const notes = JSON.parse((fetchSpy.mock.calls[1][1] as RequestInit).body as string);
+			expect(notes.params.args[5]).toEqual([
+				[
+					["model", "=", "project.task"],
+					["message_id", "=like", "<ghoodoo.workflow-failure-ab-run-%@github>"],
+				],
+			]);
+			const tasks = JSON.parse((fetchSpy.mock.calls[2][1] as RequestInit).body as string);
+			expect(tasks.params.args[5]).toEqual([
+				[
+					["project_id", "=", 2],
+					["state", "not in", ["1_done", "1_canceled"]],
+					"|",
+					["id", "in", [7, 8]],
+					["description", "ilike", "[workflow-failure-ab]"],
+				],
+			]);
+		});
+
+		it.each([
+			[
+				"the newest task in an open stage",
+				[task(9, [2, "In Progress"]), task(7, [2, "In Progress"])],
+				9,
+			],
+			["a task without a stage", [task(9, null)], 9],
+			["an older task past the Done stage", [task(9, [5, "Done"]), task(7, [2, "In Progress"])], 7],
+			[
+				"an older task past the Canceled stage",
+				[task(9, [6, "Canceled"]), task(7, [1, "Todo"])],
+				7,
+			],
+			["no task in an open stage", [task(9, [5, "Done"])], null],
+		] as const)("returns %s", async (_case, tasks, expected) => {
+			expect(await find(baseConfig, [...tasks])).toBe(expected);
+		});
+
+		it("compares a stage name with the task's own stage, not another project's", async () => {
+			const config = { ...baseConfig, stages: { done: "Done", canceled: "Canceled" } };
+			expect(await find(config, [task(9, [12, "Done"]), task(7, [12, "Todo"])])).toBe(7);
+		});
+	});
+
+	describe("findTaskByDescription", () => {
+		it("searches every project, archived tasks included", async () => {
+			fetchSpy = mockFetch([authResponse, { result: [{ id: 900 }] }]);
+			expect(await new OdooClient(baseConfig).findTaskByDescription("[key-run-1-1]")).toBe(900);
+			const callBody = JSON.parse((fetchSpy.mock.calls[1][1] as RequestInit).body as string);
+			expect(callBody.params.args[5]).toEqual([
+				[
+					["description", "ilike", "[key-run-1-1]"],
+					["active", "in", [true, false]],
+				],
+			]);
+		});
+	});
+
+	describe("findTaskByEffect", () => {
+		it.each([
+			["exact", "<ghoodoo.workflow-failure-ab-run-12-1.%@github>"],
+			["prefix", "<ghoodoo.workflow-failure-ab-run-12-1%@github>"],
+		] as const)("searches every task's notes with the %s marker", async (match, pattern) => {
+			fetchSpy = mockFetch([authResponse, { result: [{ id: 3, res_id: 44 }] }]);
+			const taskId = await new OdooClient(baseConfig).findTaskByEffect(
+				"workflow-failure-ab-run-12-1",
+				match,
+			);
+			expect(taskId).toBe(44);
+			const callBody = JSON.parse((fetchSpy.mock.calls[1][1] as RequestInit).body as string);
+			expect(callBody.params.args[5]).toEqual([
+				[
+					["model", "=", "project.task"],
+					["message_id", "=like", pattern],
+				],
+			]);
+		});
+
+		it("returns null without a matching note", async () => {
+			fetchSpy = mockFetch([authResponse, { result: [] }]);
+			expect(await new OdooClient(baseConfig).findTaskByEffect("x", "prefix")).toBeNull();
+		});
+	});
+
 	describe("setPrimaryPullRequestUrl", () => {
 		it("writes the primary PR field", async () => {
 			fetchSpy = mockFetch([authResponse, { result: true }]);

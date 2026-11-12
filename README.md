@@ -34,6 +34,8 @@ wrangler secret put ODOO_DEFAULT_USER_ID          # optional
 wrangler secret put ODOO_CF_ACCESS_CLIENT_ID       # optional (Cloudflare Access service token)
 wrangler secret put ODOO_CF_ACCESS_CLIENT_SECRET   # optional (Cloudflare Access service token)
 wrangler secret put SENTRY_DSN                     # optional
+wrangler secret put WORKFLOW_FAILURE_PROJECT_ID    # optional (failed scheduled workflow runs)
+wrangler secret put WORKFLOW_FAILURE_WORKFLOWS     # optional (failed scheduled workflow runs)
 ```
 
 | Binding | Description |
@@ -53,6 +55,8 @@ wrangler secret put SENTRY_DSN                     # optional
 | `ODOO_CF_ACCESS_CLIENT_ID` | Optional: Cloudflare Access service token client ID for protected Odoo |
 | `ODOO_CF_ACCESS_CLIENT_SECRET` | Optional: Cloudflare Access service token client secret for protected Odoo |
 | `SENTRY_DSN` | Optional: Send errors and processing warnings to Sentry |
+| `WORKFLOW_FAILURE_PROJECT_ID` | Optional: Odoo project ID for tasks about failed scheduled workflow runs (see below) |
+| `WORKFLOW_FAILURE_WORKFLOWS` | Optional: Comma-separated `owner/repo:Workflow name` entries, e.g. `owner/repo:CI` |
 
 If `ODOO_URL` is protected by Cloudflare Access, set both `ODOO_CF_ACCESS_CLIENT_ID` and `ODOO_CF_ACCESS_CLIENT_SECRET`. Without these, requests may be redirected to Access login and webhook processing will fail with a clear redirect/non-JSON error.
 
@@ -93,7 +97,7 @@ Subsequent releases only require `pnpm deploy`. The deployment registers `ghoodo
 2. Set Payload URL to `https://ghoodoo.<your-subdomain>.workers.dev/webhook`
 3. Set Content type to `application/json`
 4. Set Secret to match `GITHUB_WEBHOOK_SECRET`
-5. Select events: `Push` and `Pull requests`
+5. Select events: `Push` and `Pull requests`, and `Workflow runs` for failed scheduled workflow runs
 
 ## Usage
 
@@ -144,6 +148,15 @@ Plain mentions and `Refs ODP-XXX` are chatter-only: they never change stages or 
 If `ODOO_STAGE_REVIEW` is unset, becoming ready for review records chatter without changing the stage; it does not fall back to In Progress. Opening a non-draft PR still uses In Progress.
 
 > **Note:** Stage transitions only work for tasks that belong to a project. Personal/private tasks cannot have project stages assigned.
+
+### Failed scheduled workflow runs (optional)
+
+With `WORKFLOW_FAILURE_PROJECT_ID` and `WORKFLOW_FAILURE_WORKFLOWS` set and the webhook's `Workflow runs` event selected, a failed scheduled run of a listed workflow on the repository's default branch becomes an Odoo task in that project. Only a completed run with the conclusion `failure`, `timed_out` or `startup_failure`, triggered by `schedule`, counts; the webhook acknowledges every other run without queueing it.
+
+- The first failed run creates the task `Scheduled workflow failed: <owner/repo> · <workflow>`; every failed run adds one note with its link, conclusion, branch and commit.
+- The notes' message IDs carry a hash of the workflow and the run, and a task this feature creates names both in its description (`Ghoodoo keys: [...]`). They identify the workflow's tasks, so renaming a task changes nothing. While one of them is open (neither in a done or canceled state nor in the `ODOO_STAGE_DONE` or `ODOO_STAGE_CANCELED` stage), later failed runs add notes to the newest open one, also to an older task that was reopened. Close the task when the cause is fixed; the next failed run creates a new one. Keep the keys line when you edit the description.
+- A retried delivery finds the run's note on any task, also one closed in the meantime, and then does nothing. A retry after its task was created but before the note was written finds that task by its keys, also when another run arrived in between or the task was closed, archived or moved to another project since.
+- The bot user needs create rights for tasks in the project; a malformed `workflow_run` payload gets HTTP 400.
 
 ### Message Author
 
