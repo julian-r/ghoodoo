@@ -610,4 +610,137 @@ describe("Worker integration", () => {
 			expect(ack).toHaveBeenCalledOnce();
 		});
 	});
+
+	describe("failed scheduled workflow runs", () => {
+		const trackedEnv: Env = {
+			...testEnv,
+			WORKFLOW_FAILURE_PROJECT_ID: "2",
+			WORKFLOW_FAILURE_WORKFLOWS: "owner/repo:CI",
+		};
+		const workflowRun = {
+			action: "completed",
+			workflow_run: {
+				id: 4321,
+				run_attempt: 1,
+				run_number: 77,
+				name: "CI",
+				event: "schedule",
+				conclusion: "failure",
+				head_branch: "main",
+				head_sha: "0123456789abcdef",
+				html_url: "https://github.com/owner/repo/actions/runs/4321",
+				jobs_url: "https://api.github.com/repos/owner/repo/actions/runs/4321/jobs",
+			},
+			repository: { full_name: "owner/repo", default_branch: "main", private: true },
+		};
+
+		it("acknowledges untracked runs, and every run while the feature is off, without queueing", async () => {
+			for (const [env, payload] of [
+				[testEnv, workflowRun],
+				[
+					trackedEnv,
+					{ ...workflowRun, workflow_run: { ...workflowRun.workflow_run, conclusion: "success" } },
+				],
+				[
+					trackedEnv,
+					{ ...workflowRun, workflow_run: { ...workflowRun.workflow_run, event: "push" } },
+				],
+			] as const) {
+				const response = await worker.fetch(
+					await webhookRequest("workflow_run", JSON.stringify(payload)),
+					env,
+				);
+				expect(response.status).toBe(200);
+				expect(await response.json()).toMatchObject({ message: "Workflow run not tracked" });
+			}
+			expect(queueSend).not.toHaveBeenCalled();
+		});
+
+		it("rejects a signed workflow_run payload without the fields it reads", async () => {
+			for (const payload of ["null", JSON.stringify({ action: "completed" })]) {
+				const response = await worker.fetch(
+					await webhookRequest("workflow_run", payload),
+					trackedEnv,
+				);
+				expect(response.status).toBe(400);
+			}
+			expect(queueSend).not.toHaveBeenCalled();
+		});
+
+		it("queues a tracked failure with only the fields the consumer reads", async () => {
+			const response = await worker.fetch(
+				await webhookRequest("workflow_run", JSON.stringify(workflowRun)),
+				trackedEnv,
+			);
+			expect(response.status).toBe(202);
+			expect(queueSend).toHaveBeenCalledOnce();
+			const queued = queueSend.mock.calls[0][0] as GitHubEventMessage;
+			expect(queued.eventType).toBe("workflow_run");
+			expect(queued.event).not.toHaveProperty("workflow_run.jobs_url");
+			expect(queued.event).not.toHaveProperty("repository.private");
+		});
+
+		it("creates the task and its run note through Odoo, then acknowledges", async () => {
+			const calls: Array<[string, string, unknown]> = [];
+			vi.spyOn(global, "fetch").mockImplementation(async (_url, init) => {
+				const request = JSON.parse(String(init?.body));
+				const args = request.params.args;
+				let result: unknown;
+				if (request.params.service === "common") result = 42;
+				else {
+					calls.push([args[3], args[4], args[5]]);
+					if (args[3] === "project.task" && args[4] === "search_read") result = [];
+					else if (args[3] === "project.task" && args[4] === "create") result = [900];
+					else if (args[3] === "mail.message" && args[4] === "search_read") result = [];
+					else if (args[3] === "mail.message.subtype") result = [{ id: 1, name: "Note" }];
+					else if (args[3] === "mail.message" && args[4] === "create") result = [31];
+					else throw new Error(`Unexpected RPC: ${JSON.stringify(request)}`);
+				}
+				return Response.json({ jsonrpc: "2.0", id: request.id, result });
+			});
+			await worker.fetch(
+				await webhookRequest("workflow_run", JSON.stringify(workflowRun)),
+				trackedEnv,
+			);
+			const { batch, ack, retry } = queueBatch(queueSend.mock.calls[0][0] as GitHubEventMessage);
+			await worker.queue(batch, trackedEnv);
+
+			expect(retry).not.toHaveBeenCalled();
+			expect(ack).toHaveBeenCalledOnce();
+			// The run's own note, a task this attempt created, then the workflow's notes and tasks.
+			const searches = calls
+				.filter(([, method]) => method === "search_read")
+				.map(([model]) => model);
+			expect(searches.slice(0, 4)).toEqual([
+				"mail.message",
+				"project.task",
+				"mail.message",
+				"project.task",
+			]);
+			expect(JSON.stringify(calls[0][2])).toMatch(
+				/workflow-failure-[0-9a-f]{16}-run-4321-1\.%@github/,
+			);
+			expect(JSON.stringify(calls[1][2])).toMatch(/\[workflow-failure-[0-9a-f]{16}-run-4321-1\]/);
+			expect(JSON.stringify(calls[2][2])).toMatch(/workflow-failure-[0-9a-f]{16}-run-%@github/);
+			expect(JSON.stringify(calls[3][2])).toMatch(/\[workflow-failure-[0-9a-f]{16}\]/);
+			const created = calls.find(
+				([model, method]) => model === "project.task" && method === "create",
+			);
+			expect(created?.[2]).toEqual([
+				expect.objectContaining({
+					project_id: 2,
+					name: "Scheduled workflow failed: owner/repo · CI",
+				}),
+			]);
+			const note = calls.find(([model, method]) => model === "mail.message" && method === "create");
+			expect(note?.[2]).toEqual([
+				expect.objectContaining({
+					res_id: 900,
+					message_id: expect.stringMatching(
+						/^<ghoodoo\.workflow-failure-[0-9a-f]{16}-run-4321-1\.effect@github>$/,
+					),
+				}),
+			]);
+		});
+	});
 });
